@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+    {{template "head" .}}
+    <title>{{.PageTitle}} · bili</title>
+</head>
+<body>
+    {{template "topbar" .}}
+    <main class="container">
+        {{if .Error}}
+            <p class="error">{{.Error}}</p>
+        {{else if not .Cards}}
+            <p class="muted">{{.EmptyMsg}}</p>
+        {{else}}
+            <ul class="card-grid">
+                {{range .Cards}}{{template "card" .}}{{end}}
+            </ul>
+            {{if .Next}}
+            <div class="loadmore"><a href="{{.Next.URL}}">{{if .Next.Label}}{{.Next.Label}}{{else}}Load more →{{end}}</a></div>
+            {{end}}
+        {{end}}
+    </main>
+</body>
+</html>

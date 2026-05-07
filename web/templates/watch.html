@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+    {{template "head" .}}
+    <title>{{.Video.Title}} · bili</title>
+</head>
+<body>
+    {{template "topbar" .}}
+    <script src="/static/danmaku.js" defer></script>
+    <main class="container watch">
+        <div class="player-wrap">
+            <video controls playsinline preload="metadata"
+                   poster="/img?u={{.Video.Thumb | urlquery}}"
+                   src="{{.StreamSrc}}">
+                Your browser does not support the video element.
+            </video>
+            <div class="danmaku-layer" data-url="/danmaku/{{.Video.BVID}}?cid={{.SelectedCID}}"></div>
+        </div>
+        <div class="watch-actions">
+            <button id="danmaku-toggle" class="dm-toggle" type="button">弹 ON</button>
+        </div>
+        <h1 class="watch-title">{{.Video.Title}}</h1>
+        <p class="byline">{{.Video.Owner}}</p>
+        {{if .Video.Season}}
+        <section class="season">
+            <h2 class="section-title">合集 · {{.Video.Season.Title}} <span class="muted">({{len .Video.Season.Episodes}})</span></h2>
+            <ol class="season-list">
+                {{range .Video.Season.Episodes}}
+                <li>
+                    <a href="/watch/{{.BVID}}" {{if eq .BVID $.Video.BVID}}class="active"{{end}}>
+                        <div class="ep-thumb">
+                            <img loading="lazy" src="/img?u={{.ThumbURL | urlquery}}" alt="">
+                            {{if .Duration}}<span class="ep-duration">{{.Duration}}</span>{{end}}
+                        </div>
+                        <span class="ep-title">{{.Title}}</span>
+                    </a>
+                </li>
+                {{end}}
+            </ol>
+        </section>
+        {{end}}
+        {{if gt (len .Video.Pages) 1}}
+        <section class="parts">
+            <h2 class="section-title">Parts</h2>
+            <ol class="part-list">
+                {{range .Video.Pages}}
+                <li><a href="/watch/{{$.Video.BVID}}?cid={{.CID}}" {{if eq .CID $.SelectedCID}}class="active"{{end}}>P{{.Page}} · {{.Title}}</a></li>
+                {{end}}
+            </ol>
+        </section>
+        {{end}}
+        {{if .Video.Description}}
+        <details class="desc">
+            <summary>Description</summary>
+            <pre>{{.Video.Description}}</pre>
+        </details>
+        {{end}}
+        {{if .Comments}}
+        <section class="comments">
+            <h2 class="section-title">Comments</h2>
+            {{range .Comments}}
+            <article class="comment">
+                <img class="avatar" loading="lazy" src="/img?u={{.AvatarURL | urlquery}}" alt="">
+                <div class="body">
+                    <div class="head">
+                        <span class="author">{{.Author}}</span>
+                        <span class="time">{{.PostedHuman}}</span>
+                    </div>
+                    <p class="text">{{.Text}}</p>
+                    {{if or .Likes .Replies}}
+                    <p class="meta">
+                        {{if .Likes}}<span>♥ {{.Likes}}</span>{{end}}
+                        {{if .Replies}}<span>↩ {{.Replies}}</span>{{end}}
+                    </p>
+                    {{end}}
+                </div>
+            </article>
+            {{end}}
+        </section>
+        {{end}}
+    </main>
+</body>
+</html>

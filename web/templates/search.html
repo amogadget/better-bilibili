@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+    {{template "head" .}}
+    <title>{{if .Query}}{{.Query}} · {{end}}Search · bili</title>
+</head>
+<body>
+    {{template "topbar" .}}
+    <main class="container">
+        {{if .Error}}
+            <p class="error">{{.Error}}</p>
+        {{else if not .Cards}}
+            {{if .Query}}<p class="muted">No results for &ldquo;{{.Query}}&rdquo;.</p>{{end}}
+        {{else}}
+            <ul class="card-grid">
+                {{range .Cards}}{{template "card" .}}{{end}}
+            </ul>
+            {{if .Next}}
+            <div class="loadmore"><a href="{{.Next.URL}}">Load more →</a></div>
+            {{end}}
+        {{end}}
+    </main>
+</body>
+</html>

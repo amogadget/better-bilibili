@@ -1,0 +1,13 @@
+[Unit]
+Description=Bilibili Web Proxy
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/bili-web-vps
+ExecStart=/home/ubuntu/bili-web-vps/bili-web -config /home/ubuntu/bili-web-vps/config.yaml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

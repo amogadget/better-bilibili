@@ -1,0 +1,36 @@
+{{define "head"}}
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0d10">
+    <link rel="stylesheet" href="/static/style.css">
+{{end}}
+
+{{define "topbar"}}
+<header class="topbar">
+    <a href="/" class="brand">bili</a>
+    <form method="get" action="/search" class="searchbar">
+        <input type="search" name="q" value="{{.Query}}" placeholder="Search bilibili" autocomplete="off">
+    </form>
+</header>
+<nav class="subnav">
+    <a href="/" {{if eq .Section "home"}}class="active"{{end}}>Recommended</a>
+    <a href="/subscriptions" {{if eq .Section "subscriptions"}}class="active"{{end}}>Subscriptions</a>
+    <a href="/favorites" {{if eq .Section "favorites"}}class="active"{{end}}>Favorites</a>
+    <a href="/watch-later" {{if eq .Section "watch-later"}}class="active"{{end}}>Watch later</a>
+</nav>
+{{end}}
+
+{{define "card"}}
+<li class="card">
+    <a class="card-link" href="/watch/{{.BVID}}">
+        <div class="thumb">
+            <img loading="lazy" src="/img?u={{.ThumbURL | urlquery}}" alt="">
+            {{if .Duration}}<span class="duration">{{.Duration}}</span>{{end}}
+        </div>
+        <div class="meta">
+            <h3 class="title">{{.Title}}</h3>
+            <p class="byline"><span>{{.Author}}</span>{{if .Subtitle}} · <span>{{.Subtitle}}</span>{{end}}</p>
+        </div>
+    </a>
+</li>
+{{end}}

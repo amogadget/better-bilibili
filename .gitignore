@@ -1,0 +1,25 @@
+# Personal data — keep your bilibili cookies out of git.
+config.yaml
+config.yml
+config.local.*
+.env
+.env.local
+
+# Build artifacts.
+/bili-web
+/bin/
+*.exe
+
+# Runtime caches written by the HLS pipeline (ffmpeg segment dirs).
+/cache/
+
+# Logs.
+*.log
+
+# Editor / OS noise.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+    {{template "head" .}}
+    <title>Favorites · bili</title>
+</head>
+<body>
+    {{template "topbar" .}}
+    <main class="container">
+        {{if .Error}}
+            <p class="error">{{.Error}}</p>
+        {{else if not .Folders}}
+            <p class="muted">You don't have any favorite folders yet.</p>
+        {{else}}
+            <ul class="folder-list">
+                {{range .Folders}}
+                <li>
+                    <a href="/favorites/{{.ID}}">
+                        <span class="folder-title">{{.Title}}</span>
+                        <span class="folder-count">{{.Count}}</span>
+                    </a>
+                </li>
+                {{end}}
+            </ul>
+        {{end}}
+    </main>
+</body>
+</html>
