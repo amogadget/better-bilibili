@@ -227,6 +227,60 @@ button.link:hover { color: var(--text); }
 .byline-link { color: var(--muted); }
 .byline-link:hover { color: var(--text); }
 
+/* Landscape fullscreen mode triggered by the swipe-up gesture in the
+   iOS native shell. Hides chrome, makes the player fill the viewport,
+   and shows a circular close button in the top-left. */
+#bili-fs-close { display: none; }
+
+body.bili-landscape-fullscreen {
+    overflow: hidden;
+}
+body.bili-landscape-fullscreen > header,
+body.bili-landscape-fullscreen > nav,
+body.bili-landscape-fullscreen .container > *:not(.player-wrap) {
+    display: none !important;
+}
+body.bili-landscape-fullscreen .container {
+    padding: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+}
+body.bili-landscape-fullscreen .player-wrap {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    z-index: 9999;
+    background: #000;
+}
+body.bili-landscape-fullscreen .player-wrap video {
+    width: 100% !important;
+    height: 100% !important;
+    max-height: none !important;
+    object-fit: contain;
+}
+body.bili-landscape-fullscreen #bili-fs-close {
+    display: flex;
+    position: fixed;
+    top: max(env(safe-area-inset-top, 0px), 12px);
+    left: max(env(safe-area-inset-left, 0px), 12px);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.65);
+    color: #fff;
+    border: 0;
+    font-size: 22px;
+    line-height: 1;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    cursor: pointer;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+}
+
 /* "Load more" pagination link */
 .loadmore { text-align: center; margin: 20px 0 8px; }
 .loadmore a {
