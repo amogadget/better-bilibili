@@ -156,9 +156,11 @@ share via git.
 
 ## Caveats
 
-- **Cookie storage:** WKWebView keeps its own cookies separately from
-  Safari's. The first time you open the app, you'll need to scan the QR
-  login again.
+- **Login state is shared with Safari.** The bilibili session lives on
+  *the server* (in `config.yaml`), not in your browser's cookies. Once
+  you've QR-logged-in from any client (Safari, the iOS app, anywhere),
+  every other client of the same server sees you as logged in. You should
+  not need to scan the QR again when first opening the app.
 - **Updating the URL:** if your bili-web hostname changes, edit
   `ContentView.swift` and rebuild.
 - **No Now Playing artwork bridge yet:** iOS picks up the title and
