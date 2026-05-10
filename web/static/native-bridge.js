@@ -28,13 +28,26 @@
         };
     }
 
+    // Prefer the audio-only DASH URL when the page provides one. That way
+    // the native AVPlayer fetches ~100 Kbps of audio instead of duplicating
+    // the full ~3 Mbps audio+video stream the visible <video> element is
+    // already pulling. Falls back to the combined stream for completeness.
+    function audioSourceURL() {
+        const audioEl = document.getElementById('player-audio');
+        const explicit = audioEl && audioEl.dataset && audioEl.dataset.audioSrc;
+        if (explicit) return new URL(explicit, location.href).href;
+        if (video.src) return new URL(video.src, location.href).href;
+        return null;
+    }
+
     function pushState() {
-        if (!video.src) return;
+        const src = audioSourceURL();
+        if (!src) return;
         const meta = readMeta();
         try {
             native.postMessage({
                 action: 'state',
-                src: new URL(video.src, location.href).href,
+                src: src,
                 currentTime: video.currentTime,
                 duration: isFinite(video.duration) ? video.duration : 0,
                 playing: !video.paused,

@@ -61,6 +61,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /img", s.handleImageProxy)
 	mux.HandleFunc("GET /watch/{bvid}", s.handleWatch)
 	mux.HandleFunc("GET /stream/{bvid}", s.handleStream)
+	mux.HandleFunc("GET /stream/audio/{bvid}", s.handleStreamAudio)
 	mux.HandleFunc("GET /hls/{bvid}/{file}", s.handleHLS)
 	mux.HandleFunc("GET /danmaku/{bvid}", s.handleDanmaku)
 	mux.HandleFunc("GET /subscriptions", s.handleSubscriptions)
@@ -532,6 +533,75 @@ func (s *Server) handleDanmaku(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	json.NewEncoder(w).Encode(items)
+}
+
+// handleStreamAudio proxies the audio-only DASH track for a bvid+cid. Used
+// by the iOS native shell so its background AVPlayer fetches just audio
+// (~100 Kbps) instead of the combined audio+video stream the web <video>
+// uses (~3 Mbps).
+func (s *Server) handleStreamAudio(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.LoggedIn() {
+		http.Error(w, "not logged in", http.StatusUnauthorized)
+		return
+	}
+	bvid := r.PathValue("bvid")
+	if !validBVID(bvid) {
+		http.Error(w, "bad bvid", http.StatusBadRequest)
+		return
+	}
+
+	cidStr := r.URL.Query().Get("cid")
+	var cid int64
+	if cidStr == "" {
+		info, err := s.bili.VideoInfo(r.Context(), bvid)
+		if err != nil {
+			http.Error(w, "video info: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		cid = info.CID
+	} else {
+		n, err := strconv.ParseInt(cidStr, 10, 64)
+		if err != nil {
+			http.Error(w, "bad cid", http.StatusBadRequest)
+			return
+		}
+		cid = n
+	}
+
+	dash, err := s.bili.PlayURLDASH(r.Context(), bvid, cid, defaultQuality)
+	if err != nil {
+		http.Error(w, "playurl dash: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	req, err := s.bili.NewRequest(r.Context(), "GET", dash.AudioURL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rng := r.Header.Get("Range"); rng != "" {
+		req.Header.Set("Range", rng)
+	}
+	resp, err := s.bili.HTTPStream.Do(req)
+	if err != nil {
+		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
+	}
+	if w.Header().Get("Accept-Ranges") == "" {
+		w.Header().Set("Accept-Ranges", "bytes")
+	}
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "audio/mp4")
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // handleHLS serves the HLS playlist + fmp4 segments produced by the ffmpeg

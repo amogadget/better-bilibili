@@ -19,7 +19,8 @@
             <audio id="player-audio" preload="none" muted hidden
                    data-title="{{.Video.Title}}"
                    data-author="{{.Video.Owner}}"
-                   data-poster="/img?u={{.Video.Thumb | urlquery}}"></audio>
+                   data-poster="/img?u={{.Video.Thumb | urlquery}}"
+                   data-audio-src="/stream/audio/{{.Video.BVID}}?cid={{.SelectedCID}}"></audio>
             <div class="danmaku-layer" data-url="/danmaku/{{.Video.BVID}}?cid={{.SelectedCID}}"></div>
         </div>
         <div class="watch-actions">
