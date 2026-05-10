@@ -42,6 +42,7 @@ final class BiliPlayer: NSObject {
     private weak var webView: WKWebView?
     private var artworkCacheKey: String?
     private var nowPlayingArtwork: MPMediaItemArtwork?
+    private var resigningActive = false
 
     override init() {
         super.init()
@@ -54,10 +55,18 @@ final class BiliPlayer: NSObject {
     }
 
     func update(state: State) {
-        // While the WebContent process is suspended (app backgrounded),
-        // ignore state pushes — anything we receive is iOS auto-pause noise,
-        // not a user action.
-        if UIApplication.shared.applicationState == .background {
+        // When the app is heading to the background, iOS auto-pauses the
+        // WKWebView <video>. That pause can arrive here before UIKit sets
+        // applicationState to .inactive, so a state-based guard misses it.
+        // Instead we use willResignActiveNotification — it fires at the
+        // very start of the UIKit transition, before the WebContent process
+        // is even notified. native-bridge.js also suppresses pushState when
+        // document.visibilityState !== 'visible' as a second layer.
+        //
+        // We still fall back to the .background check so state pushes that
+        // arrive after the app is fully backgrounded (rare but possible if
+        // the web process fires a late tick) are also blocked.
+        if resigningActive || UIApplication.shared.applicationState == .background {
             lastState = state
             refreshNowPlayingInfo()
             return
@@ -109,6 +118,10 @@ final class BiliPlayer: NSObject {
                        name: UIApplication.willEnterForegroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(handleInterruption),
                        name: AVAudioSession.interruptionNotification, object: nil)
+        nc.addObserver(self, selector: #selector(willResignActive),
+                       name: UIApplication.willResignActiveNotification, object: nil)
+        nc.addObserver(self, selector: #selector(didBecomeActive),
+                       name: UIApplication.didBecomeActiveNotification, object: nil)
     }
 
     @objc private func willEnterForeground() {
@@ -127,6 +140,14 @@ final class BiliPlayer: NSObject {
             let js = "window.__biliSync && window.__biliSync(\(resumeAt));"
             webView?.evaluateJavaScript(js, completionHandler: nil)
         }
+    }
+
+    @objc private func willResignActive() {
+        resigningActive = true
+    }
+
+    @objc private func didBecomeActive() {
+        resigningActive = false
     }
 
     @objc private func handleInterruption(_ notification: Notification) {
@@ -189,11 +210,13 @@ final class BiliPlayer: NSObject {
         cc.playCommand.addTarget { [weak self] _ in
             self?.player?.play()
             self?.evalOnWeb("document.querySelector('#player-video')?.play();")
+            self?.refreshNowPlayingInfo()
             return .success
         }
         cc.pauseCommand.addTarget { [weak self] _ in
             self?.player?.pause()
             self?.evalOnWeb("document.querySelector('#player-video')?.pause();")
+            self?.refreshNowPlayingInfo()
             return .success
         }
         cc.changePlaybackPositionCommand.addTarget { [weak self] event in
