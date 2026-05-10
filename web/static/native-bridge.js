@@ -54,6 +54,11 @@
     }
 
     function pushState() {
+        // When the page is hidden (app backgrounded, screen locked), iOS
+        // auto-pauses the <video> — that's noise, not a user action. The
+        // native AVPlayer keeps running independently.
+        if (document.visibilityState !== 'visible') return;
+
         const src = audioSourceURL();
         if (!src) return;
         const meta = readMeta();
