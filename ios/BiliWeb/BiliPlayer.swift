@@ -54,12 +54,11 @@ final class BiliPlayer: NSObject {
     }
 
     func update(state: State) {
-        // While the app is not the active foreground scene, ignore state
-        // pushes from the web page. iOS sends an auto-pause to the <video>
-        // during the .inactive window (swipe-to-home transition) as well as
-        // in .background; both are noise, not user actions. The native
-        // AVPlayer keeps running independently.
-        if UIApplication.shared.applicationState != .active {
+        // While the WebContent process is suspended (app backgrounded),
+        // ignore state pushes — anything we receive is iOS auto-pause noise,
+        // not a user action.
+        if UIApplication.shared.applicationState == .background {
+            lastState = state
             refreshNowPlayingInfo()
             return
         }
@@ -128,7 +127,6 @@ final class BiliPlayer: NSObject {
             let js = "window.__biliSync && window.__biliSync(\(resumeAt));"
             webView?.evaluateJavaScript(js, completionHandler: nil)
         }
-        refreshNowPlayingInfo()
     }
 
     @objc private func handleInterruption(_ notification: Notification) {
@@ -148,15 +146,6 @@ final class BiliPlayer: NSObject {
 
     // MARK: - Now Playing
 
-    private func setPlaying(_ playing: Bool) {
-        guard let s = lastState else { return }
-        lastState = State(
-            src: s.src, currentTime: s.currentTime, duration: s.duration,
-            playing: playing, title: s.title, artist: s.artist, artworkURL: s.artworkURL
-        )
-        refreshNowPlayingInfo()
-    }
-
     private func refreshNowPlayingInfo() {
         guard let state = lastState else { return }
         let elapsed = player?.currentTime().seconds ?? state.currentTime
@@ -168,7 +157,7 @@ final class BiliPlayer: NSObject {
         if state.duration.isFinite, state.duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = state.duration
         }
-        info[MPNowPlayingInfoPropertyPlaybackRate] = state.playing ? 1.0 : 0.0
+        info[MPNowPlayingInfoPropertyPlaybackRate] = (player?.rate ?? 0) > 0 ? 1.0 : 0.0
         if let art = nowPlayingArtwork {
             info[MPMediaItemPropertyArtwork] = art
         }
@@ -199,13 +188,11 @@ final class BiliPlayer: NSObject {
         let cc = MPRemoteCommandCenter.shared()
         cc.playCommand.addTarget { [weak self] _ in
             self?.player?.play()
-            self?.setPlaying(true)
             self?.evalOnWeb("document.querySelector('#player-video')?.play();")
             return .success
         }
         cc.pauseCommand.addTarget { [weak self] _ in
             self?.player?.pause()
-            self?.setPlaying(false)
             self?.evalOnWeb("document.querySelector('#player-video')?.pause();")
             return .success
         }
@@ -215,7 +202,6 @@ final class BiliPlayer: NSObject {
             else { return .commandFailed }
             self.player?.seek(to: CMTime(seconds: positionEvent.positionTime, preferredTimescale: 1000))
             self.evalOnWeb("var v=document.querySelector('#player-video'); if(v)v.currentTime=\(positionEvent.positionTime);")
-            self.refreshNowPlayingInfo()
             return .success
         }
     }
