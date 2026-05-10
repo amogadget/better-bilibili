@@ -128,8 +128,22 @@ Now go back to Xcode, hit Run again. The app launches.
 5. The audio should keep playing. You should also see the title +
    thumbnail on the lock screen with play/pause controls.
 
-If audio cuts when you lock — the most common reason is that the
-Background Modes capability didn't get checked correctly. Repeat step 4.
+If audio cuts when you lock or swipe home, work through these in order:
+
+1. **Background Modes capability is actually enabled.** Repeat step 4 and
+   confirm "Audio, AirPlay, and Picture in Picture" is checked. After any
+   change here, stop the app on the phone and re-run from Xcode — capability
+   changes only take effect in a fresh build.
+2. **The silence loop in `BiliWebApp.swift` is running.** WKWebView's audio
+   does not automatically inherit the host app's background-audio rights;
+   the host app must itself be actively producing audio. The
+   `SilenceKeeper` class plays an inaudible buffer on a continuous loop to
+   claim the audio session — without it, WKWebView audio behaves exactly
+   like Safari, which is to say it stops on lock/background. If you copied
+   an older `BiliWebApp.swift`, replace it with the current version.
+3. **AVAudioSession.setActive succeeded.** Watch Xcode's console while the
+   app launches; if you see `audio session setup failed:` or
+   `silence engine failed to start:`, paste the error and we can dig in.
 
 ## Re-installing weekly (free signing only)
 
