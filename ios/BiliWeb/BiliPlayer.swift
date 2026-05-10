@@ -1,34 +1,28 @@
 // BiliPlayer.swift
 //
-// The bridge that gives this app real "YouTube-app-style" background audio.
+// Native-AVPlayer-backed background audio for the iOS shell.
 //
-// Why this exists:
+// Architecture (mirrors what YouTube's iOS app effectively does):
 //
-//   WKWebView runs its content in a separate WebContent process. When the
-//   host app backgrounds, iOS suspends WebContent — the page's <audio> and
-//   <video> elements stop, and there is no host-side workaround that can
-//   reach into that other process. Background-audio entitlements only apply
-//   to audio produced by the host app's own process.
+//   foreground                background              foreground again
+//   ──────────                ──────────              ────────────────
+//   WKWebView <video>         WKWebView suspended     WKWebView <video>
+//   plays + audible           native AVPlayer         seeks to AVPlayer
+//                             unmutes — instant       currentTime, plays
+//   native AVPlayer
+//   plays + MUTED, in
+//   lockstep w/ web
 //
-// What it does:
+// The key trick: native AVPlayer is ALWAYS playing in lockstep with the
+// web's <video> while the app is foregrounded — it's just muted, so the
+// audible audio comes from the web. When the app backgrounds, iOS suspends
+// WebContent (so the web's audio stops) and we unmute the native AVPlayer
+// in the same instant. There is no buffer/load/seek delay because native
+// has been playing the whole time.
 //
-//   The web page (when it detects it's running in the native shell) posts
-//   periodic state updates over a `player` message channel: stream URL,
-//   currentTime, play/pause flag, title, artist, artwork URL.
-//
-//   When the app enters background, BiliPlayer takes the most recent state,
-//   spins up an AVPlayer in the host process pointing at the same stream
-//   URL, seeks to the recorded position, and starts playing. The host app's
-//   audio session (Background Modes = Audio) keeps that AVPlayer alive
-//   indefinitely.
-//
-//   When the app enters foreground, BiliPlayer pauses the AVPlayer, reads
-//   its currentTime, and tells the web page to seek <video> to that
-//   timestamp and resume. From the user's perspective playback never
-//   stopped — they just see/hear the source switch under the hood.
-//
-//   Now Playing center (lock-screen panel + Control Center) is fed by
-//   MPNowPlayingInfoCenter; remote-control commands map to AVPlayer.
+// Cost: roughly 2× bandwidth while the app is foregrounded, because the
+// web and the native player each fetch the same stream. This drops back
+// to 1× the moment the app backgrounds (web stops fetching).
 
 import AVFoundation
 import MediaPlayer
@@ -63,21 +57,62 @@ final class BiliPlayer: NSObject {
         self.webView = webView
     }
 
-    // Called from the WKScriptMessageHandler when JS pushes new state.
+    /// Called from the WKScriptMessageHandler whenever the web pushes new
+    /// playback state. Maintains an AVPlayer running in lockstep with the
+    /// web's <video> so it can take over instantly when the app backgrounds.
     func update(state: State) {
-        lastState = state
-        // If AVPlayer is currently active (i.e. we're in background), keep it
-        // in sync with the web's seeks.
-        if let player = player, !UIApplication.shared.applicationState.isForegroundLike {
-            if let item = player.currentItem,
-               let currentURL = (item.asset as? AVURLAsset)?.url,
-               currentURL != state.src {
-                replaceItem(with: state.src, startAt: state.currentTime)
-            } else {
+        let appIsBackground = UIApplication.shared.applicationState == .background
+
+        // While we're already running playback in the background, ignore web
+        // state pushes that try to pause us — the web JS context is being
+        // suspended anyway and any "pause" we receive is iOS auto-pausing,
+        // not the user.
+        if appIsBackground {
+            // We still want to update Now Playing metadata (e.g. title) if it
+            // arrived just before suspension.
+            lastState = state
+            refreshNowPlayingInfo()
+            return
+        }
+
+        let currentURL = (player?.currentItem?.asset as? AVURLAsset)?.url
+        if currentURL != state.src {
+            replaceItem(with: state.src, startAt: state.currentTime)
+        } else if let player = player {
+            // Same source: only re-seek on noticeable drift, otherwise we'd
+            // jitter every timeupdate.
+            let nativeTime = player.currentTime().seconds
+            if abs(nativeTime - state.currentTime) > 1.0 {
                 player.seek(to: CMTime(seconds: state.currentTime, preferredTimescale: 1000))
             }
         }
+
+        // Mirror web's play/pause state.
+        if state.playing {
+            if player?.rate == 0 { player?.play() }
+        } else {
+            if player?.rate != 0 { player?.pause() }
+        }
+
+        // While foreground, audio comes from the web's <video>; native is
+        // muted-but-playing so it can become audible instantly on lock.
+        player?.isMuted = true
+
+        lastState = state
         refreshNowPlayingInfo()
+    }
+
+    private func replaceItem(with url: URL, startAt seconds: Double) {
+        let item = AVPlayerItem(url: url)
+        if let player = player {
+            player.replaceCurrentItem(with: item)
+        } else {
+            player = AVPlayer(playerItem: item)
+        }
+        player?.automaticallyWaitsToMinimizeStalling = true
+        if seconds > 0 {
+            player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 1000))
+        }
     }
 
     // MARK: - App lifecycle
@@ -91,41 +126,38 @@ final class BiliPlayer: NSObject {
     }
 
     @objc private func didEnterBackground() {
-        guard let state = lastState, state.playing else { return }
-        replaceItem(with: state.src, startAt: state.currentTime)
-        player?.play()
-        refreshNowPlayingInfo()
+        // The native AVPlayer has been playing all along — just unmute.
+        // No buffer, no seek, no startup delay.
+        player?.isMuted = false
     }
 
     @objc private func willEnterForeground() {
         guard let player = player else { return }
+        // Hand audio back to the web. Tell it where AVPlayer reached so the
+        // visible <video> can seek there before the user even sees it.
         let resumeAt = player.currentTime().seconds
-        player.pause()
-        // Best-effort: tell the web page to pick up where we left off.
         let js = "window.__biliResume && window.__biliResume(\(resumeAt));"
-        webView?.evaluateJavaScript(js, completionHandler: nil)
-    }
-
-    private func replaceItem(with url: URL, startAt seconds: Double) {
-        let item = AVPlayerItem(url: url)
-        if let player = player {
-            player.replaceCurrentItem(with: item)
-        } else {
-            player = AVPlayer(playerItem: item)
+        webView?.evaluateJavaScript(js) { [weak player] _, _ in
+            player?.isMuted = true
         }
-        player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 1000))
     }
 
     // MARK: - Now Playing
 
     private func refreshNowPlayingInfo() {
         guard let state = lastState else { return }
+        // Prefer native AVPlayer's clock over the (possibly stale) web state
+        // when reporting elapsed time to the lock screen.
+        let elapsed = player?.currentTime().seconds ?? state.currentTime
+
         var info: [String: Any] = [:]
         info[MPMediaItemPropertyTitle] = state.title
         info[MPMediaItemPropertyArtist] = state.artist
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = state.currentTime
-        if state.duration.isFinite { info[MPMediaItemPropertyPlaybackDuration] = state.duration }
-        info[MPNowPlayingInfoPropertyPlaybackRate] = state.playing ? 1.0 : 0.0
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
+        if state.duration.isFinite, state.duration > 0 {
+            info[MPMediaItemPropertyPlaybackDuration] = state.duration
+        }
+        info[MPNowPlayingInfoPropertyPlaybackRate] = (player?.rate ?? 0) > 0 ? 1.0 : 0.0
         if let art = nowPlayingArtwork {
             info[MPMediaItemPropertyArtwork] = art
         }
@@ -178,8 +210,4 @@ final class BiliPlayer: NSObject {
             self?.webView?.evaluateJavaScript(js, completionHandler: nil)
         }
     }
-}
-
-private extension UIApplication.State {
-    var isForegroundLike: Bool { self == .active || self == .inactive }
 }
