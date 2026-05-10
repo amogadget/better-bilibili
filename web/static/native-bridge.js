@@ -88,6 +88,13 @@
         video.play().catch(() => { /* may need user tap; harmless */ });
     };
 
+    // Seek-only variant called when the user had paused before backgrounding.
+    // Syncs the visible frame to where AVPlayer reached, but does not start
+    // playback — the user left it paused and we respect that.
+    window.__biliSync = function (t) {
+        try { video.currentTime = t; } catch (e) { /* ignore unseekable state */ }
+    };
+
     // Initial sync as soon as metadata is ready (covers the foreground "scan
     // and chill" case before the user actually plays).
     if (video.readyState >= 1) pushState();
