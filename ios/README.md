@@ -54,18 +54,27 @@ the license. This may take 30+ minutes the first time.
    the `.xcodeproj` tracked in git. (Most people keep iOS projects in a
    separate folder.) Click Create.
 
-### 3. Replace the generated source files
+### 3. Replace the generated source files and add a third one
 
-Xcode generates `BiliWebApp.swift` and `ContentView.swift`. We have replacements.
+Xcode generates `BiliWebApp.swift` and `ContentView.swift`. We have
+replacements, plus one extra file (`BiliPlayer.swift`) that needs to be
+added to the project.
 
 In Finder, navigate to the project folder Xcode created. Inside it you'll
-see a `BiliWeb/` folder containing those two `.swift` files.
+see a `BiliWeb/` folder containing the two generated `.swift` files.
 
 1. **Replace `BiliWebApp.swift`** with the version from this repo:
    `ios/BiliWeb/BiliWebApp.swift`
 2. **Replace `ContentView.swift`** with the version from this repo:
    `ios/BiliWeb/ContentView.swift`
-3. **Open `ContentView.swift` in Xcode** and change the line:
+3. **Add `BiliPlayer.swift`** to the project. Two ways:
+   - Easiest: copy `ios/BiliWeb/BiliPlayer.swift` from this repo into the
+     same `BiliWeb/` folder in your Xcode project, then in Xcode use
+     **File → Add Files to "BiliWeb"…**, pick the file, and make sure
+     "Copy items if needed" is unchecked and the BiliWeb target is checked.
+   - Or drag-and-drop the file from Finder into the BiliWeb folder in
+     Xcode's left sidebar; Xcode will offer to add it to the target.
+4. **Open `ContentView.swift` in Xcode** and change the line:
    ```swift
    let kBiliWebURL = "https://bili.example.com"
    ```
@@ -160,13 +169,44 @@ its own little adventure; not covered here.
 
 ## Files in this directory
 
-- `BiliWeb/BiliWebApp.swift` — `@main` entry, configures AVAudioSession.
-- `BiliWeb/ContentView.swift` — SwiftUI view with the WKWebView.
+- `BiliWeb/BiliWebApp.swift` — `@main` entry, configures AVAudioSession,
+  starts the silent-audio loop that keeps the audio session alive.
+- `BiliWeb/ContentView.swift` — SwiftUI view with the WKWebView and the
+  `WKScriptMessageHandler` glue for the `player` channel.
+- `BiliWeb/BiliPlayer.swift` — `AVPlayer`-backed bridge. When the app
+  backgrounds, this takes the most recent state pushed by the web page,
+  spins up `AVPlayer` against the same stream URL, and keeps audio
+  playing. On foreground it pauses and tells the web `<video>` to seek
+  back to where audio reached. Also feeds Now Playing center and handles
+  remote control commands.
 
-These are designed to be **drag-and-drop replacements** for what Xcode's
-new-project wizard generates. There's deliberately no `.xcodeproj` in this
-directory: project files have machine-specific paths and are unfriendly to
-share via git.
+These are designed to be **drag-and-drop replacements (and additions)** for
+what Xcode's new-project wizard generates. There's deliberately no
+`.xcodeproj` in this directory: project files have machine-specific paths
+and are unfriendly to share via git.
+
+## How background audio actually works
+
+WKWebView runs the page in a separate WebContent process that iOS
+suspends when the app backgrounds, regardless of host-app
+`UIBackgroundModes`. So `<audio>`/`<video>` inside the page can't be the
+ones playing while the screen is locked.
+
+Instead, the host app runs a `BiliPlayer` (an `AVPlayer` in the host
+process) that takes over on background:
+
+```
+foreground             background              foreground again
+─────────              ──────────              ───────────────
+WKWebView <video>  →   AVPlayer (host)    →    WKWebView <video>
+plays + pushes         loads same URL,         seeks to AVPlayer
+state messages         seeks, plays            currentTime, plays
+```
+
+The web page only does its part if it sees `window.webkit.messageHandlers
+.player` (i.e. it's inside this app, not Safari). In Safari the page
+falls back to the dual-`<audio>` trick from `audio-mode.js`, which is
+weaker but is the best a website can do.
 
 ## Caveats
 

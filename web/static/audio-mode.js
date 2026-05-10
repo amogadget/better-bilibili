@@ -12,6 +12,13 @@
 // practice. Bandwidth normalizes back to single-stream the moment the page
 // hides (video stays paused; only audio runs).
 (function () {
+    // When running inside the iOS native shell, native-bridge.js + AVPlayer
+    // own background audio. The dual-<audio> hack below would just fight
+    // them, so stand down.
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player) {
+        return;
+    }
+
     const video = document.getElementById('player-video');
     const audio = document.getElementById('player-audio');
     if (!video || !audio) return;
