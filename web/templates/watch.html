@@ -7,13 +7,18 @@
 <body>
     {{template "topbar" .}}
     <script src="/static/danmaku.js" defer></script>
+    <script src="/static/audio-mode.js" defer></script>
     <main class="container watch">
         <div class="player-wrap">
-            <video controls playsinline preload="metadata"
+            <video id="player-video" controls playsinline preload="metadata"
                    poster="/img?u={{.Video.Thumb | urlquery}}"
                    src="{{.StreamSrc}}">
                 Your browser does not support the video element.
             </video>
+            <audio id="player-audio" preload="none" muted hidden
+                   data-title="{{.Video.Title}}"
+                   data-author="{{.Video.Owner}}"
+                   data-poster="/img?u={{.Video.Thumb | urlquery}}"></audio>
             <div class="danmaku-layer" data-url="/danmaku/{{.Video.BVID}}?cid={{.SelectedCID}}"></div>
         </div>
         <div class="watch-actions">
