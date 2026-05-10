@@ -100,6 +100,21 @@ While you're on this tab, also confirm:
 - **"Automatically manage signing"** is checked.
 - The **Team** dropdown shows your Apple ID.
 
+### 4b. Enable landscape orientations
+
+Without this, the swipe-up-to-rotate gesture (and any other fullscreen
+video) won't rotate the screen to landscape — iOS won't rotate to an
+orientation the app hasn't declared it supports.
+
+1. Same target → **General** tab.
+2. Scroll to **Deployment Info → iPhone Orientation**.
+3. Check **Portrait**, **Landscape Left**, and **Landscape Right** (Upside
+   Down is optional).
+4. Rebuild (⌘R).
+
+The Xcode SwiftUI template sometimes ships with only Portrait checked,
+which is why fullscreen video appears upright instead of rotating.
+
 ### 5. Plug in your iPhone and run
 
 1. Plug your iPhone into the Mac with a cable.
