@@ -39,11 +39,10 @@ struct BiliWebApp: App {
     private func configureAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(
-                .playback,
-                mode: .moviePlayback,
-                options: [.allowAirPlay]
-            )
+            // .allowAirPlay requires the .playAndRecord category and would
+            // produce OSStatus -50 with .playback. AirPlay works with
+            // .playback by default — no option flag needed.
+            try session.setCategory(.playback, mode: .moviePlayback)
             try session.setActive(true)
         } catch {
             print("BiliWeb: audio session setup failed: \(error)")
