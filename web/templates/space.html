@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+    {{template "head" .}}
+    <title>{{if .Channel}}{{.Channel.Name}}{{else}}Channel{{end}} · bili</title>
+</head>
+<body>
+    {{template "topbar" .}}
+    <main class="container">
+        {{if .Channel}}
+        <header class="channel-header">
+            <img class="channel-avatar" src="/img?u={{.Channel.AvatarURL | urlquery}}" alt="">
+            <div class="channel-meta">
+                <h1>{{.Channel.Name}}</h1>
+                {{if .Channel.Followers}}<p class="channel-followers">{{.Channel.Followers}} followers</p>{{end}}
+                {{if .Channel.Sign}}<p class="channel-sign">{{.Channel.Sign}}</p>{{end}}
+            </div>
+        </header>
+
+        <nav class="channel-tabs">
+            <a href="/space/{{.Channel.MID}}?tab=videos&amp;order={{.Order}}" {{if eq .Tab "videos"}}class="active"{{end}}>Videos</a>
+            <a href="/space/{{.Channel.MID}}?tab=playlists" {{if eq .Tab "playlists"}}class="active"{{end}}>Playlists</a>
+        </nav>
+
+        {{if eq .Tab "videos"}}
+        <div class="channel-controls">
+            <a href="/space/{{.Channel.MID}}?tab=videos&amp;order=pubdate" {{if eq .Order "pubdate"}}class="active"{{end}}>Latest</a>
+            <a href="/space/{{.Channel.MID}}?tab=videos&amp;order=click" {{if eq .Order "click"}}class="active"{{end}}>Most popular</a>
+        </div>
+        {{end}}
+        {{end}}
+
+        {{if .Error}}
+            <p class="error">{{.Error}}</p>
+        {{else if eq .Tab "videos"}}
+            {{if not .VideoCards}}
+                <p class="muted">No videos yet.</p>
+            {{else}}
+                <ul class="card-grid">
+                    {{range .VideoCards}}{{template "card" .}}{{end}}
+                </ul>
+            {{end}}
+        {{else if eq .Tab "playlists"}}
+            {{if not .Playlists}}
+                <p class="muted">No playlists.</p>
+            {{else}}
+                <ul class="card-grid">
+                    {{range .Playlists}}
+                    <li class="card">
+                        <a class="card-link" href="/season/{{.SeasonID}}?mid={{.MID}}">
+                            <div class="thumb">
+                                <img loading="lazy" src="/img?u={{.CoverURL | urlquery}}" alt="">
+                                <span class="duration">{{.Count}} videos</span>
+                            </div>
+                            <div class="meta">
+                                <h3 class="title">{{.Name}}</h3>
+                            </div>
+                        </a>
+                    </li>
+                    {{end}}
+                </ul>
+            {{end}}
+        {{end}}
+
+        {{if .Next}}
+        <div class="loadmore"><a href="{{.Next.URL}}">Load more →</a></div>
+        {{end}}
+    </main>
+</body>
+</html>

@@ -171,6 +171,62 @@ button.link:hover { color: var(--text); }
 .meta .byline { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .error { color: #ff6b7a; }
 
+/* channel page (/space/{mid}) */
+.channel-header {
+    display: flex; gap: 16px; align-items: center;
+    padding: 12px 0 16px;
+}
+.channel-avatar {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: var(--surface);
+    flex-shrink: 0;
+}
+.channel-meta { min-width: 0; }
+.channel-meta h1 { margin: 0; font-size: 22px; font-weight: 600; line-height: 1.2; }
+.channel-followers { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.channel-sign { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+
+.channel-tabs {
+    display: flex; gap: 6px;
+    border-bottom: 1px solid var(--border);
+    margin: 0 0 16px;
+}
+.channel-tabs a {
+    padding: 10px 14px;
+    color: var(--muted);
+    font-size: 14px; font-weight: 500;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+.channel-tabs a.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+}
+
+.channel-controls {
+    display: flex; gap: 6px;
+    margin: 0 0 14px;
+}
+.channel-controls a {
+    padding: 5px 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 12px; font-weight: 500;
+}
+.channel-controls a.active { color: var(--text); border-color: var(--accent); }
+
+@media (max-width: 480px) {
+    .channel-avatar { width: 56px; height: 56px; }
+    .channel-meta h1 { font-size: 18px; }
+}
+
+/* watch page byline link */
+.byline-link { color: var(--muted); }
+.byline-link:hover { color: var(--text); }
+
 /* "Load more" pagination link */
 .loadmore { text-align: center; margin: 20px 0 8px; }
 .loadmore a {

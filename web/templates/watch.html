@@ -32,7 +32,10 @@
             <button id="danmaku-toggle" class="dm-toggle" type="button">弹 ON</button>
         </div>
         <h1 class="watch-title">{{.Video.Title}}</h1>
-        <p class="byline">{{.Video.Owner}}</p>
+        {{/* Author link is currently only on the watch page. To make every
+             card's "Author" subtitle clickable too, thread the uploader's
+             mid through CardView and render <a> in _partials.html. */}}
+        <p class="byline"><a class="byline-link" href="/space/{{.Video.OwnerID}}">{{.Video.Owner}}</a></p>
         {{if .Video.Season}}
         <section class="season">
             <h2 class="section-title">合集 · {{.Video.Season.Title}} <span class="muted">({{len .Video.Season.Episodes}})</span></h2>

@@ -70,6 +70,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /watch-later", s.handleWatchLater)
 	mux.HandleFunc("GET /history", s.handleHistory)
 	mux.HandleFunc("POST /heartbeat", s.handleHeartbeat)
+	mux.HandleFunc("GET /space/{mid}", s.handleSpace)
+	mux.HandleFunc("GET /season/{seasonID}", s.handleSeason)
 	mux.HandleFunc("GET /", s.handleHome)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.root, "static")))))
 	return mux
@@ -238,6 +240,144 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		if page.HasMore && page.Next.Max > 0 {
 			v.Next = &NextLink{URL: fmt.Sprintf("/history?max=%d&view_at=%d", page.Next.Max, page.Next.ViewAt)}
+		}
+	}
+	s.renderList(w, v)
+}
+
+func (s *Server) handleSpace(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.LoggedIn() {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	mid, err := strconv.ParseInt(r.PathValue("mid"), 10, 64)
+	if err != nil || mid <= 0 {
+		http.Error(w, "bad mid", http.StatusBadRequest)
+		return
+	}
+
+	tab := r.URL.Query().Get("tab")
+	if tab != "playlists" {
+		tab = "videos"
+	}
+	order := orderFromQuery(r.URL.Query().Get("order"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+
+	info, err := s.bili.ChannelInfo(r.Context(), mid)
+	view := struct {
+		tplBase
+		Channel    *bili.ChannelInfo
+		Tab        string // "videos" or "playlists"
+		Order      string // "pubdate" or "click"
+		VideoCards []CardView
+		Playlists  []spacePlaylistView
+		Error      string
+		Next       *NextLink
+	}{tplBase: tplBase{}, Channel: info, Tab: tab, Order: order}
+
+	if err != nil {
+		view.Error = err.Error()
+		s.renderSpace(w, view)
+		return
+	}
+
+	if tab == "videos" {
+		vp, err := s.bili.ChannelVideos(r.Context(), mid, page, order)
+		if err != nil {
+			view.Error = err.Error()
+		} else {
+			for _, v := range vp.Items {
+				view.VideoCards = append(view.VideoCards, cardFromChannelVideo(v))
+			}
+			if vp.HasMore {
+				view.Next = &NextLink{URL: fmt.Sprintf("/space/%d?tab=videos&order=%s&page=%d", mid, order, page+1)}
+			}
+		}
+	} else {
+		sp, err := s.bili.ChannelSeasons(r.Context(), mid, page)
+		if err != nil {
+			view.Error = err.Error()
+		} else {
+			for _, p := range sp.Items {
+				view.Playlists = append(view.Playlists, spacePlaylistView{
+					SeasonID: p.SeasonID,
+					Name:     p.Name,
+					CoverURL: p.CoverURL,
+					Count:    p.Count,
+					MID:      mid,
+				})
+			}
+			if sp.HasMore {
+				view.Next = &NextLink{URL: fmt.Sprintf("/space/%d?tab=playlists&page=%d", mid, page+1)}
+			}
+		}
+	}
+
+	s.renderSpace(w, view)
+}
+
+type spacePlaylistView struct {
+	SeasonID int64
+	Name     string
+	CoverURL string
+	Count    int
+	MID      int64
+}
+
+func (s *Server) renderSpace(w http.ResponseWriter, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.tpl.ExecuteTemplate(w, "space.html", data); err != nil {
+		log.Printf("space template: %v", err)
+	}
+}
+
+// orderFromQuery normalizes an "order" query param for channel-video sorting.
+func orderFromQuery(s string) string {
+	switch s {
+	case "click", "stow":
+		return s
+	default:
+		return "pubdate"
+	}
+}
+
+func (s *Server) handleSeason(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.LoggedIn() {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	seasonID, err := strconv.ParseInt(r.PathValue("seasonID"), 10, 64)
+	if err != nil || seasonID <= 0 {
+		http.Error(w, "bad season id", http.StatusBadRequest)
+		return
+	}
+	mid, err := strconv.ParseInt(r.URL.Query().Get("mid"), 10, 64)
+	if err != nil || mid <= 0 {
+		http.Error(w, "missing or bad mid", http.StatusBadRequest)
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+
+	sp, err := s.bili.SeasonVideos(r.Context(), mid, seasonID, page)
+	v := listView{
+		tplBase:   tplBase{},
+		PageTitle: "Playlist",
+		EmptyMsg:  "This playlist is empty.",
+	}
+	if err != nil {
+		v.Error = err.Error()
+	} else {
+		for _, it := range sp.Items {
+			v.Cards = append(v.Cards, cardFromSeasonVideo(it))
+		}
+		if sp.HasMore {
+			v.Next = &NextLink{URL: fmt.Sprintf("/season/%d?mid=%d&page=%d", seasonID, mid, page+1)}
 		}
 	}
 	s.renderList(w, v)

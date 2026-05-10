@@ -87,6 +87,40 @@ func cardFromHistory(h bili.HistoryItem) CardView {
 	}
 }
 
+func cardFromChannelVideo(v bili.ChannelVideo) CardView {
+	subtitle := ""
+	if v.Plays > 0 {
+		subtitle = bili.FormatCount(v.Plays) + " views"
+	}
+	if !v.Posted.IsZero() {
+		if subtitle != "" {
+			subtitle += " · "
+		}
+		subtitle += humanTime(v.Posted)
+	}
+	return CardView{
+		BVID:     v.BVID,
+		Title:    v.Title,
+		ThumbURL: v.ThumbURL,
+		Duration: v.Duration,
+		Subtitle: subtitle,
+	}
+}
+
+func cardFromSeasonVideo(v bili.SeasonVideo) CardView {
+	subtitle := ""
+	if v.Plays > 0 {
+		subtitle = bili.FormatCount(v.Plays) + " views"
+	}
+	return CardView{
+		BVID:     v.BVID,
+		Title:    v.Title,
+		ThumbURL: v.ThumbURL,
+		Duration: bili.FormatDuration(v.Duration),
+		Subtitle: subtitle,
+	}
+}
+
 type CommentView struct {
 	Author      string
 	AvatarURL   string
