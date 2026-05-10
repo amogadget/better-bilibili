@@ -1,28 +1,24 @@
 // BiliPlayer.swift
 //
-// Native-AVPlayer-backed background audio for the iOS shell.
+// Native-AVPlayer-driven audio for the iOS shell. Mirrors the YouTube
+// architecture: AVPlayer is the *primary* audio source from the moment a
+// video starts. The web's visible <video> element runs muted (just for
+// pixels). Because AVPlayer is always actively producing audio, iOS treats
+// the host app as a real media app and keeps it running through the
+// screen-lock and app-switch transitions with zero startup gap.
 //
-// Architecture (mirrors what YouTube's iOS app effectively does):
+// Earlier iterations tried to keep AVPlayer muted in foreground and unmute
+// on background. That fails in practice because muted AVPlayer often
+// doesn't actually buffer or play — iOS lazy-loads it — so the unmute on
+// background turns into a 1–2 second cold start. Driving audio through
+// AVPlayer the whole time avoids that entirely.
 //
-//   foreground                background              foreground again
-//   ──────────                ──────────              ────────────────
-//   WKWebView <video>         WKWebView suspended     WKWebView <video>
-//   plays + audible           native AVPlayer         seeks to AVPlayer
-//                             unmutes — instant       currentTime, plays
-//   native AVPlayer
-//   plays + MUTED, in
-//   lockstep w/ web
-//
-// The key trick: native AVPlayer is ALWAYS playing in lockstep with the
-// web's <video> while the app is foregrounded — it's just muted, so the
-// audible audio comes from the web. When the app backgrounds, iOS suspends
-// WebContent (so the web's audio stops) and we unmute the native AVPlayer
-// in the same instant. There is no buffer/load/seek delay because native
-// has been playing the whole time.
-//
-// Cost: roughly 2× bandwidth while the app is foregrounded, because the
-// web and the native player each fetch the same stream. This drops back
-// to 1× the moment the app backgrounds (web stops fetching).
+// We still serve playback state both ways:
+//   - Web pushes its currentTime/play state on every event + a 2s tick;
+//     BiliPlayer mirrors that into AVPlayer.
+//   - On foreground transition, BiliPlayer reads AVPlayer's currentTime
+//     and tells the web to seek there so the visible <video> picks up
+//     exactly where audio kept reaching.
 
 import AVFoundation
 import MediaPlayer
@@ -57,19 +53,11 @@ final class BiliPlayer: NSObject {
         self.webView = webView
     }
 
-    /// Called from the WKScriptMessageHandler whenever the web pushes new
-    /// playback state. Maintains an AVPlayer running in lockstep with the
-    /// web's <video> so it can take over instantly when the app backgrounds.
     func update(state: State) {
-        let appIsBackground = UIApplication.shared.applicationState == .background
-
-        // While we're already running playback in the background, ignore web
-        // state pushes that try to pause us — the web JS context is being
-        // suspended anyway and any "pause" we receive is iOS auto-pausing,
-        // not the user.
-        if appIsBackground {
-            // We still want to update Now Playing metadata (e.g. title) if it
-            // arrived just before suspension.
+        // While the WebContent process is suspended (app backgrounded),
+        // ignore state pushes — anything we receive is iOS auto-pause noise,
+        // not a user action.
+        if UIApplication.shared.applicationState == .background {
             lastState = state
             refreshNowPlayingInfo()
             return
@@ -79,24 +67,22 @@ final class BiliPlayer: NSObject {
         if currentURL != state.src {
             replaceItem(with: state.src, startAt: state.currentTime)
         } else if let player = player {
-            // Same source: only re-seek on noticeable drift, otherwise we'd
-            // jitter every timeupdate.
+            // Same source — only re-seek on noticeable drift, otherwise this
+            // would jitter every 2-second state push.
             let nativeTime = player.currentTime().seconds
             if abs(nativeTime - state.currentTime) > 1.0 {
                 player.seek(to: CMTime(seconds: state.currentTime, preferredTimescale: 1000))
             }
         }
 
-        // Mirror web's play/pause state.
+        // Mirror web's play/pause. AVPlayer is unmuted (audible) — it owns
+        // audio output for the whole session.
+        player?.isMuted = false
         if state.playing {
             if player?.rate == 0 { player?.play() }
         } else {
             if player?.rate != 0 { player?.pause() }
         }
-
-        // While foreground, audio comes from the web's <video>; native is
-        // muted-but-playing so it can become audible instantly on lock.
-        player?.isMuted = true
 
         lastState = state
         refreshNowPlayingInfo()
@@ -119,26 +105,34 @@ final class BiliPlayer: NSObject {
 
     private func registerLifecycleObservers() {
         let nc = NotificationCenter.default
-        nc.addObserver(self, selector: #selector(didEnterBackground),
-                       name: UIApplication.didEnterBackgroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(willEnterForeground),
                        name: UIApplication.willEnterForegroundNotification, object: nil)
-    }
-
-    @objc private func didEnterBackground() {
-        // The native AVPlayer has been playing all along — just unmute.
-        // No buffer, no seek, no startup delay.
-        player?.isMuted = false
+        nc.addObserver(self, selector: #selector(handleInterruption),
+                       name: AVAudioSession.interruptionNotification, object: nil)
     }
 
     @objc private func willEnterForeground() {
         guard let player = player else { return }
-        // Hand audio back to the web. Tell it where AVPlayer reached so the
-        // visible <video> can seek there before the user even sees it.
+        // AVPlayer was the audio source while we were locked. Tell the web
+        // <video> to seek to where AVPlayer reached so the visible frame
+        // catches up to the audio.
         let resumeAt = player.currentTime().seconds
         let js = "window.__biliResume && window.__biliResume(\(resumeAt));"
-        webView?.evaluateJavaScript(js) { [weak player] _, _ in
-            player?.isMuted = true
+        webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    @objc private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let raw = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw)
+        else { return }
+
+        if type == .ended,
+           let optsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+            let opts = AVAudioSession.InterruptionOptions(rawValue: optsRaw)
+            if opts.contains(.shouldResume) {
+                player?.play()
+            }
         }
     }
 
@@ -146,8 +140,6 @@ final class BiliPlayer: NSObject {
 
     private func refreshNowPlayingInfo() {
         guard let state = lastState else { return }
-        // Prefer native AVPlayer's clock over the (possibly stale) web state
-        // when reporting elapsed time to the lock screen.
         let elapsed = player?.currentTime().seconds ?? state.currentTime
 
         var info: [String: Any] = [:]
@@ -201,6 +193,7 @@ final class BiliPlayer: NSObject {
                   let positionEvent = event as? MPChangePlaybackPositionCommandEvent
             else { return .commandFailed }
             self.player?.seek(to: CMTime(seconds: positionEvent.positionTime, preferredTimescale: 1000))
+            self.evalOnWeb("var v=document.querySelector('#player-video'); if(v)v.currentTime=\(positionEvent.positionTime);")
             return .success
         }
     }

@@ -16,6 +16,18 @@
     const video = document.getElementById('player-video');
     if (!video) return;
 
+    // In the iOS shell, native AVPlayer is the audio source. The visible
+    // <video> element is for pixels only — mute it so we don't get two
+    // simultaneous audio streams. The native player keeps producing audio
+    // through screen-lock and app-switch transitions; the web video just
+    // shows frames while the app is in foreground.
+    video.muted = true;
+    // If the user toggles unmute on the native controls, re-mute on the
+    // next event so we never play both at once.
+    video.addEventListener('volumechange', () => {
+        if (!video.muted) video.muted = true;
+    });
+
     function readMeta() {
         const titleEl  = document.querySelector('.watch-title');
         const bylineEl = document.querySelector('.byline');
@@ -28,14 +40,15 @@
         };
     }
 
-    // Prefer the audio-only DASH URL when the page provides one. That way
-    // the native AVPlayer fetches ~100 Kbps of audio instead of duplicating
-    // the full ~3 Mbps audio+video stream the visible <video> element is
-    // already pulling. Falls back to the combined stream for completeness.
+    // Use the same combined stream URL the web <video> uses. The audio-only
+    // DASH track from bilibili is a bare fragmented mp4 (no manifest) and
+    // AVPlayer doesn't reliably play it as a standalone URL — it expects a
+    // progressive mp4 or HLS playlist. Using the combined stream means the
+    // native player has the same well-formed mp4/HLS to chew on.
+    //
+    // (data-audio-src is left on the element for future use once we have a
+    // server-side HLS audio playlist or progressive-mp4 remux.)
     function audioSourceURL() {
-        const audioEl = document.getElementById('player-audio');
-        const explicit = audioEl && audioEl.dataset && audioEl.dataset.audioSrc;
-        if (explicit) return new URL(explicit, location.href).href;
         if (video.src) return new URL(video.src, location.href).href;
         return null;
     }
