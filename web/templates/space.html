@@ -9,7 +9,7 @@
     <main class="container">
         {{if .Channel}}
         <header class="channel-header">
-            <img class="channel-avatar" src="/img?u={{.Channel.AvatarURL | urlquery}}" alt="">
+            <img class="channel-avatar" src="/img?u={{resize .Channel.AvatarURL 144 144 | urlquery}}" alt="">
             <div class="channel-meta">
                 <h1>{{.Channel.Name}}</h1>
                 {{if .Channel.Followers}}<p class="channel-followers">{{.Channel.Followers}} followers</p>{{end}}

@@ -32,7 +32,13 @@ type Server struct {
 }
 
 func New(cfg *config.Config, webRoot, cacheRoot string) (*Server, error) {
-	tpl, err := template.ParseGlob(filepath.Join(webRoot, "templates", "*.html"))
+	funcs := template.FuncMap{
+		// "resize" rewrites a bilibili image URL to fetch a thumbnail at the
+		// given dimensions. Use in templates for avatars and any other small
+		// image: <img src="/img?u={{resize .URL 144 144 | urlquery}}">
+		"resize": bili.ResizeImage,
+	}
+	tpl, err := template.New("").Funcs(funcs).ParseGlob(filepath.Join(webRoot, "templates", "*.html"))
 	if err != nil {
 		return nil, err
 	}

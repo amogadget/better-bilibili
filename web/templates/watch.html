@@ -75,7 +75,7 @@
             <h2 class="section-title">Comments</h2>
             {{range .Comments}}
             <article class="comment">
-                <img class="avatar" loading="lazy" src="/img?u={{.AvatarURL | urlquery}}" alt="">
+                <img class="avatar" loading="lazy" src="/img?u={{resize .AvatarURL 72 72 | urlquery}}" alt="">
                 <div class="body">
                     <div class="head">
                         <span class="author">{{.Author}}</span>

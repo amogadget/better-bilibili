@@ -43,6 +43,14 @@ struct WebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .always
+        // Lock the WebView's zoom to 1.0 so pinch gestures don't bloat the
+        // layout. (System-wide accessibility zoom — Settings → Display &
+        // Brightness → Display Zoom — still works; only in-app pinch is
+        // disabled.) Safari users keep their zoom; this only affects the
+        // native shell.
+        webView.scrollView.minimumZoomScale = 1.0
+        webView.scrollView.maximumZoomScale = 1.0
+        webView.scrollView.bouncesZoom = false
         context.coordinator.player.attach(webView: webView)
         webView.load(URLRequest(url: url))
         return webView
