@@ -82,8 +82,40 @@ struct WebView: UIViewRepresentable {
                     artworkURL: (body["artwork"] as? String).flatMap(URL.init)
                 )
                 player.update(state: state)
+            case "orientation":
+                let to = (body["to"] as? String) ?? "portrait"
+                forceOrientation(landscape: to == "landscape")
             default:
                 break
+            }
+        }
+
+        /// Forces the OS to rotate the app, regardless of physical device
+        /// orientation. This is what YouTube's iOS app does to make video
+        /// fullscreen rotate to landscape on demand. Without this call, iOS
+        /// only rotates when (a) the device is physically turned and (b)
+        /// rotation lock is off — which is why the swipe-up gesture wasn't
+        /// rotating before.
+        private func forceOrientation(landscape: Bool) {
+            let mask: UIInterfaceOrientationMask = landscape ? [.landscape] : [.portrait]
+            DispatchQueue.main.async {
+                AppDelegate.supportedOrientations = mask
+                if #available(iOS 16.0, *) {
+                    for scene in UIApplication.shared.connectedScenes {
+                        guard let windowScene = scene as? UIWindowScene else { continue }
+                        let prefs = UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: mask)
+                        windowScene.requestGeometryUpdate(prefs) { error in
+                            print("BiliWeb: requestGeometryUpdate failed: \(error)")
+                        }
+                        windowScene.windows.forEach { window in
+                            window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+                        }
+                    }
+                } else {
+                    let orientation: UIInterfaceOrientation = landscape ? .landscapeRight : .portrait
+                    UIDevice.current.setValue(orientation.rawValue, forKey: "orientation")
+                    UIViewController.attemptRotationToDeviceOrientation()
+                }
             }
         }
     }

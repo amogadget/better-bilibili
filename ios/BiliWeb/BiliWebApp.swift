@@ -17,9 +17,25 @@
 
 import SwiftUI
 import AVFoundation
+import UIKit
+
+/// AppDelegate lets us answer iOS's "which orientations does this app
+/// currently support" question dynamically. We default to portrait, then
+/// flip to landscape briefly while the user is in fullscreen video and
+/// flip back on exit. iOS reads this every time it considers a rotation.
+class AppDelegate: NSObject, UIApplicationDelegate {
+    static var supportedOrientations: UIInterfaceOrientationMask = [.portrait]
+
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        return AppDelegate.supportedOrientations
+    }
+}
 
 @main
 struct BiliWebApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     // Hold onto the silence keeper for the app's lifetime so the engine
     // doesn't get torn down by ARC.
     private static let silence = SilenceKeeper()
