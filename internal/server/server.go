@@ -68,6 +68,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /favorites", s.handleFavorites)
 	mux.HandleFunc("GET /favorites/{fid}", s.handleFavoriteFolder)
 	mux.HandleFunc("GET /watch-later", s.handleWatchLater)
+	mux.HandleFunc("GET /history", s.handleHistory)
+	mux.HandleFunc("POST /heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("GET /", s.handleHome)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.root, "static")))))
 	return mux
@@ -208,6 +210,74 @@ func (s *Server) handleFavoriteFolder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.renderList(w, v)
+}
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.LoggedIn() {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	var cursor bili.HistoryCursor
+	if v := r.URL.Query().Get("max"); v != "" {
+		cursor.Max, _ = strconv.ParseInt(v, 10, 64)
+	}
+	if v := r.URL.Query().Get("view_at"); v != "" {
+		cursor.ViewAt, _ = strconv.ParseInt(v, 10, 64)
+	}
+	page, err := s.bili.WatchHistory(r.Context(), cursor)
+	v := listView{
+		tplBase:   tplBase{Section: "history"},
+		PageTitle: "History",
+		EmptyMsg:  "No watch history yet.",
+	}
+	if err != nil {
+		v.Error = err.Error()
+	} else {
+		for _, it := range page.Items {
+			v.Cards = append(v.Cards, cardFromHistory(it))
+		}
+		if page.HasMore && page.Next.Max > 0 {
+			v.Next = &NextLink{URL: fmt.Sprintf("/history?max=%d&view_at=%d", page.Next.Max, page.Next.ViewAt)}
+		}
+	}
+	s.renderList(w, v)
+}
+
+func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.LoggedIn() {
+		http.Error(w, "not logged in", http.StatusUnauthorized)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	bvid := r.PostForm.Get("bvid")
+	if !validBVID(bvid) {
+		http.Error(w, "bad bvid", http.StatusBadRequest)
+		return
+	}
+	aid, err := strconv.ParseInt(r.PostForm.Get("aid"), 10, 64)
+	if err != nil || aid <= 0 {
+		http.Error(w, "bad aid", http.StatusBadRequest)
+		return
+	}
+	cid, err := strconv.ParseInt(r.PostForm.Get("cid"), 10, 64)
+	if err != nil || cid <= 0 {
+		http.Error(w, "bad cid", http.StatusBadRequest)
+		return
+	}
+	t, err := strconv.Atoi(r.PostForm.Get("t"))
+	if err != nil || t < 0 {
+		http.Error(w, "bad t", http.StatusBadRequest)
+		return
+	}
+	if err := s.bili.ReportProgress(r.Context(), aid, cid, bvid, t); err != nil {
+		log.Printf("heartbeat %s t=%d: %v", bvid, t, err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleWatchLater(w http.ResponseWriter, r *http.Request) {
@@ -421,6 +491,16 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		commentViews = append(commentViews, commentToView(c))
 	}
 
+	// Pull bilibili's server-side last-played position so the player can
+	// resume silently. Suppress the resume if the previous session was
+	// effectively complete (>95% watched).
+	resumeAt, _ := s.bili.VideoProgress(r.Context(), info.AID, selectedCID)
+	if info.Duration > 0 && resumeAt > 0 {
+		if float64(resumeAt)/float64(info.Duration) > 0.95 {
+			resumeAt = 0
+		}
+	}
+
 	data := struct {
 		tplBase
 		Video       *bili.VideoInfo
@@ -429,6 +509,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		StreamSrc   string
 		UseHLS      bool
 		Comments    []CommentView
+		ResumeAt    int
 	}{
 		Video:       info,
 		Stream:      stream,
@@ -436,6 +517,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		StreamSrc:   streamSrc,
 		UseHLS:      useHLS,
 		Comments:    commentViews,
+		ResumeAt:    resumeAt,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -9,10 +9,15 @@
     <script src="/static/danmaku.js" defer></script>
     <script src="/static/audio-mode.js" defer></script>
     <script src="/static/native-bridge.js" defer></script>
+    <script src="/static/progress.js" defer></script>
     <main class="container watch">
         <div class="player-wrap">
             <video id="player-video" controls playsinline preload="metadata"
                    poster="/img?u={{.Video.Thumb | urlquery}}"
+                   data-aid="{{.Video.AID}}"
+                   data-cid="{{.SelectedCID}}"
+                   data-bvid="{{.Video.BVID}}"
+                   data-resume-at="{{.ResumeAt}}"
                    src="{{.StreamSrc}}">
                 Your browser does not support the video element.
             </video>

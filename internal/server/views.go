@@ -76,6 +76,17 @@ func cardFromWatchLater(w bili.WatchLaterItem) CardView {
 	}
 }
 
+func cardFromHistory(h bili.HistoryItem) CardView {
+	return CardView{
+		BVID:     h.BVID,
+		Title:    h.Title,
+		ThumbURL: h.ThumbURL,
+		Duration: bili.FormatDuration(h.Duration),
+		Author:   h.Author,
+		Subtitle: humanTime(h.ViewedAt),
+	}
+}
+
 type CommentView struct {
 	Author      string
 	AvatarURL   string
