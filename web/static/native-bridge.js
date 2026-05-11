@@ -10,7 +10,7 @@
 // In Safari (no message handler) this file does nothing; audio-mode.js
 // handles the dual-element fallback there.
 (function () {
-    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt6';
+    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt7';
 
     const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
     if (!native) { console.log('[BiliWeb] ' + BUILD_TAG + ' (no native bridge)'); return; }
@@ -47,6 +47,8 @@
     // a chance to race ahead of the pause event.
     let lastUserGesture = 0;
     let currentTouchStartedAt = 0;
+    let touchMoveCount = 0;
+    let strayTouchMoveCount = 0;
     const GESTURE_WINDOW_MS = 500;
     const PAUSE_DEFER_MS = 300;
 
@@ -63,10 +65,33 @@
         const tgt = (e.target && e.target.tagName) || '?';
         currentTouchStartedAt = Date.now();
         lastUserGesture = currentTouchStartedAt;
+        touchMoveCount = 0;
         nlog('touchstart target=' + tgt + ' y=' + (t ? Math.round(t.clientY) : 'n/a') + '/' + window.innerHeight);
     }, true);
-    document.addEventListener('touchmove', () => { lastUserGesture = Date.now(); }, true);
-    document.addEventListener('touchend',  () => { currentTouchStartedAt = 0; }, true);
+    // Attempt 7: gate touchmove on currentTouchStartedAt > 0. Attempt 6's
+    // unconditional `lastUserGesture = Date.now()` was overwritten by
+    // touchmove events that fired during/after the home-indicator swipe,
+    // defeating the touchcancel rollback. After touchcancel zeroes out
+    // currentTouchStartedAt, no further touchmove credits a gesture.
+    document.addEventListener('touchmove', () => {
+        if (currentTouchStartedAt > 0) {
+            touchMoveCount++;
+            lastUserGesture = Date.now();
+        } else {
+            // Diagnostic: if iOS keeps firing touchmove after the touch was
+            // canceled/ended, log a few so we can see it without spamming.
+            strayTouchMoveCount++;
+            if (strayTouchMoveCount <= 3) {
+                nlog('stray touchmove after cancel/end (#' + strayTouchMoveCount + ')');
+            }
+        }
+    }, true);
+    document.addEventListener('touchend',  () => {
+        if (currentTouchStartedAt > 0) {
+            nlog('touchend after ' + touchMoveCount + ' touchmoves');
+        }
+        currentTouchStartedAt = 0;
+    }, true);
     document.addEventListener('touchcancel', () => {
         // iOS claimed this in-progress touch as a system gesture. Roll
         // back lastUserGesture to BEFORE the touch started so any pause
@@ -74,15 +99,19 @@
         // action. This is the primary defense against the home-indicator
         // swipe being misread as a user tap.
         if (currentTouchStartedAt > 0) {
-            lastUserGesture = currentTouchStartedAt - 1;
-            nlog('touchcancel — rolled gesture back to ' + (currentTouchStartedAt - 1));
+            const rollbackTo = currentTouchStartedAt - 1;
+            nlog('touchcancel after ' + touchMoveCount + ' touchmoves — rolling gesture back to ' + rollbackTo);
+            lastUserGesture = rollbackTo;
         } else {
             nlog('touchcancel (no active touch)');
         }
         currentTouchStartedAt = 0;
+        strayTouchMoveCount = 0;
     }, true);
 
     document.addEventListener('mousedown',    () => { lastUserGesture = Date.now(); }, true);
+    // Note: pointerdown / click / keydown DO NOT fire during the iOS
+    // home-indicator swipe — they only fire from genuine user inputs.
     document.addEventListener('pointerdown',  () => { lastUserGesture = Date.now(); }, true);
     document.addEventListener('click',        () => { lastUserGesture = Date.now(); }, true);
     document.addEventListener('keydown',      () => { lastUserGesture = Date.now(); }, true);
