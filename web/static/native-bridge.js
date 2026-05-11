@@ -10,7 +10,7 @@
 // In Safari (no message handler) this file does nothing; audio-mode.js
 // handles the dual-element fallback there.
 (function () {
-    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt8';
+    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt9';
 
     const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
     if (!native) { console.log('[BiliWeb] ' + BUILD_TAG + ' (no native bridge)'); return; }
@@ -193,23 +193,27 @@
         } catch (e) { /* postMessage can throw on serialization edge cases */ }
     }
 
-    // Pause pushes are deferred so touchcancel / pagehide / visibilitychange
-    // can race ahead and invalidate the gesture credit before we send. Play
-    // and seek pushes go immediately — those are user actions that should
-    // reach AVPlayer without delay.
+    // Pause pushes are deferred only when a touch is still in progress —
+    // that's the swipe-up-mid-gesture case where we need to wait for
+    // touchcancel to race ahead and invalidate gesture credit. A clean
+    // user tap (touchstart→touchend completed) means currentTouchStartedAt
+    // is already 0 when the pause event fires, so we send immediately;
+    // this preserves Bug 3's "pause then lock" case where the visibility
+    // guard would otherwise eat the deferred pause before it reaches
+    // Swift (causing AVPlayer to keep running and the lock screen to
+    // show "playing").
     let pendingPauseTimer = null;
     function pushState(reason) {
         const wouldBePause = video.paused;
-        if (wouldBePause) {
+        if (wouldBePause && currentTouchStartedAt > 0) {
             if (pendingPauseTimer) clearTimeout(pendingPauseTimer);
             pendingPauseTimer = setTimeout(() => {
                 pendingPauseTimer = null;
                 sendState(reason + '*deferred');
             }, PAUSE_DEFER_MS);
-            nlog('pushState reason=' + reason + ' deferred ' + PAUSE_DEFER_MS + 'ms (pause)');
+            nlog('pushState reason=' + reason + ' deferred ' + PAUSE_DEFER_MS + 'ms (touch active)');
             return;
         }
-        // Non-pause: cancel any pending deferred pause and send immediately.
         if (pendingPauseTimer) {
             clearTimeout(pendingPauseTimer);
             pendingPauseTimer = null;
