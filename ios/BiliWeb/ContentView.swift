@@ -69,6 +69,12 @@ struct WebView: UIViewRepresentable {
             else { return }
 
             switch action {
+            case "log":
+                // JS forwarding console.log into Xcode's console so we can
+                // read the page's diagnostic chatter alongside Swift prints.
+                if let msg = body["msg"] as? String {
+                    print("BiliWeb: " + msg)
+                }
             case "state":
                 guard let srcStr = body["src"] as? String,
                       let src = URL(string: srcStr) else { return }

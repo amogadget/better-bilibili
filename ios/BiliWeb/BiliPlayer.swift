@@ -30,7 +30,7 @@ final class BiliPlayer: NSObject {
     // Bump this whenever you edit this file. The init() print makes it
     // appear in Xcode's console on launch so you can confirm a fresh build
     // is actually running on the device (vs. a stale install).
-    private static let buildTag = "BiliPlayer 2026-05-11/attempt5"
+    private static let buildTag = "BiliPlayer 2026-05-11/attempt6"
 
     struct State {
         let src: URL

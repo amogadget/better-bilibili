@@ -10,36 +10,89 @@
 // In Safari (no message handler) this file does nothing; audio-mode.js
 // handles the dual-element fallback there.
 (function () {
-    // Visible build marker so you can confirm in the Safari/WKWebView console
-    // that a fresh copy of this file actually reached the device. If you
-    // edit native-bridge.js and don't see the new tag on next page load,
-    // WKWebView is serving a cached copy.
-    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt5';
-    console.log('[BiliWeb] ' + BUILD_TAG);
+    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt6';
 
     const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
-    if (!native) return;
+    if (!native) { console.log('[BiliWeb] ' + BUILD_TAG + ' (no native bridge)'); return; }
+
+    // Forward JS logs to Swift so they appear in Xcode's console without
+    // needing to attach Safari Web Inspector. Use nlog() instead of
+    // console.log for anything you want to read alongside Swift's prints.
+    function nlog(msg) {
+        const line = '[js] ' + msg;
+        console.log('[BiliWeb] ' + msg);
+        try { native.postMessage({ action: 'log', msg: line }); } catch (e) { /* ignore */ }
+    }
+    nlog(BUILD_TAG);
 
     const video = document.getElementById('player-video');
     if (!video) return;
 
-    // Track when the user last interacted with the page. iOS's
-    // swipe-up-to-home is a system gesture that starts in the home-indicator
-    // strip below our safe area — it does NOT fire JS input events. So a
-    // `pause` event arriving without a recent gesture in this window is iOS
-    // auto-pausing the <video>, not the user tapping pause. Attempts 1–4
-    // tried to detect this *after* the pause arrived (via visibility,
-    // applicationState, resigningActive) — Xcode logs from 2026-05-11 proved
-    // all of those signals arrive AFTER the pause event has already been
-    // pushed to Swift and processed. The only signal that beats the pause
-    // is the absence of a preceding gesture.
+    // Attempt 6 gesture tracking.
+    //
+    // Attempt 5 assumed iOS's swipe-up-to-home produces no JS input events.
+    // The 2026-05-11 logs disproved that — the swipe fires touchstart in
+    // the page before iOS claims it as a system gesture, so the subsequent
+    // involuntary pause showed up as userInitiated=true.
+    //
+    // The signal that actually distinguishes "user tapped pause" from
+    // "iOS swiped up to home" is **touchcancel**: WebKit fires it when iOS
+    // takes over an in-progress touch (home indicator, control-center pull,
+    // notification-center pull, etc.). When that fires, retroactively
+    // revoke the gesture credit from this touch.
+    //
+    // Belt-and-suspenders: pagehide and visibilitychange-to-hidden also
+    // invalidate, in case touchcancel doesn't fire on some iOS version.
+    // And pause pushes are deferred 300ms to give the invalidation signals
+    // a chance to race ahead of the pause event.
     let lastUserGesture = 0;
+    let currentTouchStartedAt = 0;
     const GESTURE_WINDOW_MS = 500;
-    // touchmove is included so a long scrub-bar drag keeps refreshing
-    // the gesture timestamp (otherwise the pause that some browsers fire
-    // mid-scrub would look involuntary after 500ms of dragging).
-    ['touchstart', 'touchmove', 'mousedown', 'pointermove', 'click', 'keydown'].forEach((ev) => {
-        document.addEventListener(ev, () => { lastUserGesture = Date.now(); }, true);
+    const PAUSE_DEFER_MS = 300;
+
+    function invalidateGestureCredit(reason) {
+        if (lastUserGesture !== 0) {
+            nlog('gesture invalidated by ' + reason + ' (was age=' + (Date.now() - lastUserGesture) + 'ms)');
+        }
+        lastUserGesture = 0;
+        currentTouchStartedAt = 0;
+    }
+
+    document.addEventListener('touchstart', (e) => {
+        const t = e.touches && e.touches[0];
+        const tgt = (e.target && e.target.tagName) || '?';
+        currentTouchStartedAt = Date.now();
+        lastUserGesture = currentTouchStartedAt;
+        nlog('touchstart target=' + tgt + ' y=' + (t ? Math.round(t.clientY) : 'n/a') + '/' + window.innerHeight);
+    }, true);
+    document.addEventListener('touchmove', () => { lastUserGesture = Date.now(); }, true);
+    document.addEventListener('touchend',  () => { currentTouchStartedAt = 0; }, true);
+    document.addEventListener('touchcancel', () => {
+        // iOS claimed this in-progress touch as a system gesture. Roll
+        // back lastUserGesture to BEFORE the touch started so any pause
+        // event arriving in the next moments doesn't credit it as a user
+        // action. This is the primary defense against the home-indicator
+        // swipe being misread as a user tap.
+        if (currentTouchStartedAt > 0) {
+            lastUserGesture = currentTouchStartedAt - 1;
+            nlog('touchcancel — rolled gesture back to ' + (currentTouchStartedAt - 1));
+        } else {
+            nlog('touchcancel (no active touch)');
+        }
+        currentTouchStartedAt = 0;
+    }, true);
+
+    document.addEventListener('mousedown',    () => { lastUserGesture = Date.now(); }, true);
+    document.addEventListener('pointerdown',  () => { lastUserGesture = Date.now(); }, true);
+    document.addEventListener('click',        () => { lastUserGesture = Date.now(); }, true);
+    document.addEventListener('keydown',      () => { lastUserGesture = Date.now(); }, true);
+
+    window.addEventListener('pagehide', () => invalidateGestureCredit('pagehide'));
+    document.addEventListener('visibilitychange', () => {
+        nlog('visibilitychange -> ' + document.visibilityState + ' playing=' + !video.paused);
+        if (document.visibilityState !== 'visible') {
+            invalidateGestureCredit('visibilitychange');
+        }
     });
 
     // In the iOS shell, native AVPlayer is the audio source. The visible
@@ -79,18 +132,15 @@
         return null;
     }
 
-    function pushState(reason) {
+    function sendState(reason) {
         const playing = !video.paused;
         const vis = document.visibilityState;
         const gestureAge = Date.now() - lastUserGesture;
-        const userInitiated = gestureAge < GESTURE_WINDOW_MS;
-        console.log('[BiliWeb] pushState reason=' + reason + ' playing=' + playing + ' vis=' + vis + ' t=' + video.currentTime.toFixed(2) + ' gestureAge=' + gestureAge + ' userInitiated=' + userInitiated);
+        const userInitiated = lastUserGesture > 0 && gestureAge < GESTURE_WINDOW_MS;
+        nlog('pushState reason=' + reason + ' playing=' + playing + ' vis=' + vis + ' t=' + video.currentTime.toFixed(2) + ' gestureAge=' + gestureAge + ' userInit=' + userInitiated);
 
-        // When the page is hidden (app backgrounded, screen locked), iOS
-        // auto-pauses the <video> — that's noise, not a user action. The
-        // native AVPlayer keeps running independently.
         if (vis !== 'visible') {
-            console.log('[BiliWeb] pushState blocked by visibility guard');
+            nlog('pushState blocked by visibility guard');
             return;
         }
 
@@ -112,19 +162,40 @@
         } catch (e) { /* postMessage can throw on serialization edge cases */ }
     }
 
+    // Pause pushes are deferred so touchcancel / pagehide / visibilitychange
+    // can race ahead and invalidate the gesture credit before we send. Play
+    // and seek pushes go immediately — those are user actions that should
+    // reach AVPlayer without delay.
+    let pendingPauseTimer = null;
+    function pushState(reason) {
+        const wouldBePause = video.paused;
+        if (wouldBePause) {
+            if (pendingPauseTimer) clearTimeout(pendingPauseTimer);
+            pendingPauseTimer = setTimeout(() => {
+                pendingPauseTimer = null;
+                sendState(reason + '*deferred');
+            }, PAUSE_DEFER_MS);
+            nlog('pushState reason=' + reason + ' deferred ' + PAUSE_DEFER_MS + 'ms (pause)');
+            return;
+        }
+        // Non-pause: cancel any pending deferred pause and send immediately.
+        if (pendingPauseTimer) {
+            clearTimeout(pendingPauseTimer);
+            pendingPauseTimer = null;
+            nlog('pending deferred pause cancelled by ' + reason);
+        }
+        sendState(reason);
+    }
+
     video.addEventListener('play',           () => pushState('play'));
     video.addEventListener('pause',          () => pushState('pause'));
     video.addEventListener('seeked',         () => pushState('seeked'));
     video.addEventListener('loadedmetadata', () => pushState('loadedmetadata'));
     video.addEventListener('ratechange',     () => pushState('ratechange'));
 
-    document.addEventListener('visibilitychange', () => {
-        console.log('[BiliWeb] visibilitychange -> ' + document.visibilityState + ' playing=' + !video.paused);
-    });
-
     // Periodic refresh while playing so currentTime/positions on the lock screen
     // aren't stale by the time the app backgrounds.
-    setInterval(() => { if (!video.paused) pushState('tick'); }, 2000);
+    setInterval(() => { if (!video.paused) sendState('tick'); }, 2000);
 
     // Native pauses its AVPlayer on foreground transition and tells us where
     // it left off so the on-screen <video> can pick up at exactly that frame.
@@ -142,5 +213,5 @@
 
     // Initial sync as soon as metadata is ready (covers the foreground "scan
     // and chill" case before the user actually plays).
-    if (video.readyState >= 1) pushState('initial');
+    if (video.readyState >= 1) sendState('initial');
 })();
