@@ -30,7 +30,7 @@ final class BiliPlayer: NSObject {
     // Bump this whenever you edit this file. The init() print makes it
     // appear in Xcode's console on launch so you can confirm a fresh build
     // is actually running on the device (vs. a stale install).
-    private static let buildTag = "BiliPlayer 2026-05-11/attempt10"
+    private static let buildTag = "BiliPlayer 2026-05-11/attempt11"
 
     struct State {
         let src: URL
@@ -129,13 +129,46 @@ final class BiliPlayer: NSObject {
         // audio output for the whole session.
         player?.isMuted = false
         if state.playing {
-            if player?.rate == 0 { player?.play() }
+            if player?.rate == 0 {
+                claimAudioSession()
+                player?.play()
+            }
         } else {
-            if player?.rate != 0 { player?.pause() }
+            if player?.rate != 0 {
+                player?.pause()
+                releaseAudioSession()
+            }
         }
 
         lastState = state
         refreshNowPlayingInfo()
+    }
+
+    /// Activate the audio session and start the silence keeper. Called when
+    /// AVPlayer is about to play. Keeps iOS treating the app as the active
+    /// media app for the duration of playback (so background audio works),
+    /// and only for that duration (so we don't permanently hold the
+    /// Bluetooth route while the user is paused).
+    private func claimAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("BiliWeb: claimAudioSession setActive failed: \(error)")
+        }
+        BiliWebApp.silence.start()
+    }
+
+    /// Stop the silence keeper and deactivate the audio session. Called
+    /// when AVPlayer pauses. `.notifyOthersOnDeactivation` wakes up any
+    /// other media app that was waiting for the audio route (the user's
+    /// "my other devices couldn't play sounds" complaint).
+    private func releaseAudioSession() {
+        BiliWebApp.silence.stop()
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            print("BiliWeb: releaseAudioSession setActive(false) failed: \(error)")
+        }
     }
 
     private func replaceItem(with url: URL, startAt seconds: Double) {
@@ -231,36 +264,12 @@ final class BiliPlayer: NSObject {
         // the interruption happened (built-in mic, app suspended, etc.).
         print("BiliWeb: interruption type=\(raw) (\(type == .began ? "began" : "ended")) resigning=\(resigningActive) lastPlaying=\(lastState?.playing ?? false) userInfo=\(userInfo)")
 
-        if type == .began {
-            // Attempt 4 theory: when the WKWebView <video> is paused by iOS
-            // during the resign-active transition, the host's audio session
-            // gets an interruption notification, and AVPlayer auto-pauses
-            // on .began regardless of our state-push guards. If the user
-            // was playing and this interruption coincides with the resign
-            // window, force-resume — this is a system reflex, not a real
-            // user-meaningful interruption (which would be a phone call).
-            //
-            // resigningActive scopes the fix narrowly: during a normal
-            // foreground interruption (phone call, Siri, another media app),
-            // we leave AVPlayer paused and let the .ended path handle it.
-            if resigningActive, lastState?.playing == true {
-                print("BiliWeb: interruption.began during resign — re-activating session and resuming")
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    do {
-                        try AVAudioSession.sharedInstance().setActive(true)
-                    } catch {
-                        print("BiliWeb: session re-activate failed: \(error)")
-                    }
-                    self.player?.play()
-                    print("BiliWeb: post-resume playerRate=\(self.player?.rate ?? 0)")
-                }
-            }
-        } else if type == .ended,
-                  let optsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+        if type == .ended,
+           let optsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
             let opts = AVAudioSession.InterruptionOptions(rawValue: optsRaw)
             print("BiliWeb: interruption ended shouldResume=\(opts.contains(.shouldResume))")
             if opts.contains(.shouldResume) {
+                claimAudioSession()
                 player?.play()
             }
         }
@@ -290,11 +299,11 @@ final class BiliPlayer: NSObject {
             info[MPMediaItemPropertyArtwork] = art
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        // iOS 13+ uses a separate playbackState property in addition to the
-        // info-dict playback rate. Setting the info-dict rate alone isn't
-        // enough: if playbackState is .unknown (its default), the lock-screen
-        // indicator can stay stuck on the previous play state. Set both.
-        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+        // Note: `MPNowPlayingInfoCenter.default().playbackState` requires
+        // the private entitlement `com.apple.mediaremote.set-playback-state`
+        // (Xcode-signed side-loaded apps don't get it; setting it logs
+        // "Ignoring setPlaybackState" and is a no-op). The session
+        // claim/release dance below handles the real lock-screen state.
 
         print("BiliWeb: refreshNowPlayingInfo isPlaying=\(isPlaying) elapsed=\(elapsed) playerRate=\(player?.rate ?? 0)")
 
@@ -322,6 +331,7 @@ final class BiliPlayer: NSObject {
     private func setupRemoteCommands() {
         let cc = MPRemoteCommandCenter.shared()
         cc.playCommand.addTarget { [weak self] _ in
+            self?.claimAudioSession()
             self?.player?.play()
             self?.evalOnWeb("document.querySelector('#player-video')?.play();")
             self?.refreshNowPlayingInfo()
@@ -330,6 +340,7 @@ final class BiliPlayer: NSObject {
         cc.pauseCommand.addTarget { [weak self] _ in
             self?.player?.pause()
             self?.evalOnWeb("document.querySelector('#player-video')?.pause();")
+            self?.releaseAudioSession()
             self?.refreshNowPlayingInfo()
             return .success
         }

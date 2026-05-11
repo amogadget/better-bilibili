@@ -37,12 +37,18 @@ struct BiliWebApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     // Hold onto the silence keeper for the app's lifetime so the engine
-    // doesn't get torn down by ARC.
-    private static let silence = SilenceKeeper()
+    // doesn't get torn down by ARC. Exposed (non-private) so BiliPlayer
+    // can stop it when AVPlayer pauses — keeping silence running forever
+    // makes iOS treat the app as the active media app and bind the
+    // Bluetooth audio route to us continuously, blocking other apps from
+    // using BT audio while we're "paused".
+    static let silence = SilenceKeeper()
 
     init() {
         configureAudioSession()
-        BiliWebApp.silence.start()
+        // Don't start silence here — BiliPlayer will start it when
+        // AVPlayer begins playing. While the user isn't playing anything
+        // we should not hold the audio session at all.
     }
 
     var body: some Scene {
@@ -69,14 +75,20 @@ struct BiliWebApp: App {
 /// Plays an inaudible buffer on a permanent loop so iOS recognises the host
 /// app as actively producing audio. This claims the audio session for the
 /// app and lets WKWebView's audio piggyback onto the background entitlement.
+///
+/// `start()` and `stop()` are paired around AVPlayer's playing/paused state
+/// so iOS only sees us as a "media app" when we actually have audio to
+/// produce. Running silence permanently makes iOS keep our app bound to
+/// the Bluetooth audio route, blocking other apps from using BT audio.
 final class SilenceKeeper {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
-    private var started = false
+    private var setUp = false
+    private(set) var running = false
 
-    func start() {
-        guard !started else { return }
-        started = true
+    private func setUpIfNeeded() {
+        guard !setUp else { return }
+        setUp = true
 
         guard let format = AVAudioFormat(
             standardFormatWithSampleRate: 44_100,
@@ -94,14 +106,29 @@ final class SilenceKeeper {
         ) else { return }
         buffer.frameLength = frameCount
 
+        player.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
+    }
+
+    func start() {
+        setUpIfNeeded()
+        guard !running else { return }
+        running = true
         do {
             try engine.start()
         } catch {
             print("BiliWeb: silence engine failed to start: \(error)")
+            running = false
             return
         }
-
-        player.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
         player.play()
+        print("BiliWeb: silence start")
+    }
+
+    func stop() {
+        guard running else { return }
+        running = false
+        player.pause()
+        engine.stop()
+        print("BiliWeb: silence stop")
     }
 }
