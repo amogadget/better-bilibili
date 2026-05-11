@@ -10,7 +10,7 @@
 // In Safari (no message handler) this file does nothing; audio-mode.js
 // handles the dual-element fallback there.
 (function () {
-    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt7';
+    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt8';
 
     const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
     if (!native) { console.log('[BiliWeb] ' + BUILD_TAG + ' (no native bridge)'); return; }
@@ -93,18 +93,20 @@
         currentTouchStartedAt = 0;
     }, true);
     document.addEventListener('touchcancel', () => {
-        // iOS claimed this in-progress touch as a system gesture. Roll
-        // back lastUserGesture to BEFORE the touch started so any pause
-        // event arriving in the next moments doesn't credit it as a user
-        // action. This is the primary defense against the home-indicator
-        // swipe being misread as a user tap.
+        // iOS claimed this in-progress touch as a system gesture
+        // (home-indicator swipe, control center, etc.). Zero out
+        // lastUserGesture outright — not just roll back to touchstart_time-1.
+        // Attempt 7 used the rollback approach, but the 2026-05-11 logs
+        // showed deferred-pause fired with gestureAge=400ms (touchstart-time
+        // was only 400ms in the past), still inside the 500ms window.
+        // Setting to 0 makes the gesture flag fail the `lastUserGesture > 0`
+        // short-circuit in pushState — fully revoking credit, not rewinding.
         if (currentTouchStartedAt > 0) {
-            const rollbackTo = currentTouchStartedAt - 1;
-            nlog('touchcancel after ' + touchMoveCount + ' touchmoves — rolling gesture back to ' + rollbackTo);
-            lastUserGesture = rollbackTo;
+            nlog('touchcancel after ' + touchMoveCount + ' touchmoves — zeroing gesture credit');
         } else {
             nlog('touchcancel (no active touch)');
         }
+        lastUserGesture = 0;
         currentTouchStartedAt = 0;
         strayTouchMoveCount = 0;
     }, true);
