@@ -30,7 +30,7 @@ final class BiliPlayer: NSObject {
     // Bump this whenever you edit this file. The init() print makes it
     // appear in Xcode's console on launch so you can confirm a fresh build
     // is actually running on the device (vs. a stale install).
-    private static let buildTag = "BiliPlayer 2026-05-11/attempt9"
+    private static let buildTag = "BiliPlayer 2026-05-11/attempt10"
 
     struct State {
         let src: URL
@@ -271,6 +271,7 @@ final class BiliPlayer: NSObject {
     private func refreshNowPlayingInfo() {
         guard let state = lastState else { return }
         let elapsed = player?.currentTime().seconds ?? state.currentTime
+        let isPlaying = (player?.rate ?? 0) > 0
 
         var info: [String: Any] = [:]
         info[MPMediaItemPropertyTitle] = state.title
@@ -279,11 +280,23 @@ final class BiliPlayer: NSObject {
         if state.duration.isFinite, state.duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = state.duration
         }
-        info[MPNowPlayingInfoPropertyPlaybackRate] = (player?.rate ?? 0) > 0 ? 1.0 : 0.0
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        // MPNowPlayingInfoPropertyDefaultPlaybackRate must be set for the
+        // system to correctly extrapolate elapsed time from a stale info
+        // dict. Without it, iOS may treat any non-zero rate as "1.0" and
+        // get the play/pause indicator wrong.
+        info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
         if let art = nowPlayingArtwork {
             info[MPMediaItemPropertyArtwork] = art
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        // iOS 13+ uses a separate playbackState property in addition to the
+        // info-dict playback rate. Setting the info-dict rate alone isn't
+        // enough: if playbackState is .unknown (its default), the lock-screen
+        // indicator can stay stuck on the previous play state. Set both.
+        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+
+        print("BiliWeb: refreshNowPlayingInfo isPlaying=\(isPlaying) elapsed=\(elapsed) playerRate=\(player?.rate ?? 0)")
 
         if let url = state.artworkURL, url.absoluteString != artworkCacheKey {
             fetchArtwork(url)

@@ -10,7 +10,7 @@
 // In Safari (no message handler) this file does nothing; audio-mode.js
 // handles the dual-element fallback there.
 (function () {
-    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt9';
+    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt10';
 
     const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
     if (!native) { console.log('[BiliWeb] ' + BUILD_TAG + ' (no native bridge)'); return; }
