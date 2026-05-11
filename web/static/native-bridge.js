@@ -14,7 +14,7 @@
     // that a fresh copy of this file actually reached the device. If you
     // edit native-bridge.js and don't see the new tag on next page load,
     // WKWebView is serving a cached copy.
-    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt4';
+    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt5';
     console.log('[BiliWeb] ' + BUILD_TAG);
 
     const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
@@ -22,6 +22,25 @@
 
     const video = document.getElementById('player-video');
     if (!video) return;
+
+    // Track when the user last interacted with the page. iOS's
+    // swipe-up-to-home is a system gesture that starts in the home-indicator
+    // strip below our safe area — it does NOT fire JS input events. So a
+    // `pause` event arriving without a recent gesture in this window is iOS
+    // auto-pausing the <video>, not the user tapping pause. Attempts 1–4
+    // tried to detect this *after* the pause arrived (via visibility,
+    // applicationState, resigningActive) — Xcode logs from 2026-05-11 proved
+    // all of those signals arrive AFTER the pause event has already been
+    // pushed to Swift and processed. The only signal that beats the pause
+    // is the absence of a preceding gesture.
+    let lastUserGesture = 0;
+    const GESTURE_WINDOW_MS = 500;
+    // touchmove is included so a long scrub-bar drag keeps refreshing
+    // the gesture timestamp (otherwise the pause that some browsers fire
+    // mid-scrub would look involuntary after 500ms of dragging).
+    ['touchstart', 'touchmove', 'mousedown', 'pointermove', 'click', 'keydown'].forEach((ev) => {
+        document.addEventListener(ev, () => { lastUserGesture = Date.now(); }, true);
+    });
 
     // In the iOS shell, native AVPlayer is the audio source. The visible
     // <video> element is for pixels only — mute it so we don't get two
@@ -63,7 +82,9 @@
     function pushState(reason) {
         const playing = !video.paused;
         const vis = document.visibilityState;
-        console.log('[BiliWeb] pushState reason=' + reason + ' playing=' + playing + ' vis=' + vis + ' t=' + video.currentTime.toFixed(2));
+        const gestureAge = Date.now() - lastUserGesture;
+        const userInitiated = gestureAge < GESTURE_WINDOW_MS;
+        console.log('[BiliWeb] pushState reason=' + reason + ' playing=' + playing + ' vis=' + vis + ' t=' + video.currentTime.toFixed(2) + ' gestureAge=' + gestureAge + ' userInitiated=' + userInitiated);
 
         // When the page is hidden (app backgrounded, screen locked), iOS
         // auto-pauses the <video> — that's noise, not a user action. The
@@ -83,6 +104,7 @@
                 currentTime: video.currentTime,
                 duration: isFinite(video.duration) ? video.duration : 0,
                 playing: playing,
+                userInitiated: userInitiated,
                 title:   meta.title,
                 artist:  meta.artist,
                 artwork: meta.artwork,

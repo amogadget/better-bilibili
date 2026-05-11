@@ -77,6 +77,7 @@ struct WebView: UIViewRepresentable {
                     currentTime: body["currentTime"] as? Double ?? 0,
                     duration: body["duration"] as? Double ?? .nan,
                     playing: body["playing"] as? Bool ?? false,
+                    userInitiated: body["userInitiated"] as? Bool ?? false,
                     title: body["title"] as? String ?? "",
                     artist: body["artist"] as? String ?? "",
                     artworkURL: (body["artwork"] as? String).flatMap(URL.init)

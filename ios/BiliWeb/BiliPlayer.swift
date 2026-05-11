@@ -30,13 +30,18 @@ final class BiliPlayer: NSObject {
     // Bump this whenever you edit this file. The init() print makes it
     // appear in Xcode's console on launch so you can confirm a fresh build
     // is actually running on the device (vs. a stale install).
-    private static let buildTag = "BiliPlayer 2026-05-11/attempt4"
+    private static let buildTag = "BiliPlayer 2026-05-11/attempt5"
 
     struct State {
         let src: URL
         let currentTime: Double
         let duration: Double
         let playing: Bool
+        // True when the JS layer saw a recent user gesture (tap, click, key).
+        // iOS's home-indicator swipe is a system gesture below the safe area
+        // and produces NO JS input events, so an arriving pause with
+        // userInitiated=false is the OS auto-pausing — not the user.
+        let userInitiated: Bool
         let title: String
         let artist: String
         let artworkURL: URL?
@@ -63,22 +68,47 @@ final class BiliPlayer: NSObject {
 
     func update(state: State) {
         let appState = UIApplication.shared.applicationState.rawValue
-        print("BiliWeb: update(state) playing=\(state.playing) t=\(state.currentTime) resigning=\(resigningActive) appState=\(appState)")
+        print("BiliWeb: update(state) playing=\(state.playing) userInit=\(state.userInitiated) t=\(state.currentTime) resigning=\(resigningActive) appState=\(appState)")
 
-        // When the app is heading to the background, iOS auto-pauses the
-        // WKWebView <video>. That pause can arrive here before UIKit sets
-        // applicationState to .inactive, so a state-based guard misses it.
-        // Instead we use willResignActiveNotification — it fires at the
-        // very start of the UIKit transition, before the WebContent process
-        // is even notified. native-bridge.js also suppresses pushState when
-        // document.visibilityState !== 'visible' as a second layer.
+        // Attempt 5 guard. Earlier rounds keyed off visibilityState /
+        // applicationState / resigningActive — but the 2026-05-11 logs proved
+        // the iOS auto-pause `pause` event fires BEFORE any of those signals,
+        // so they all arrive too late. The only signal that beats the pause
+        // is the absence of a JS gesture (the home-indicator swipe is a
+        // system gesture and never enters the page's input pipeline).
         //
-        // We still fall back to the .background check so state pushes that
-        // arrive after the app is fully backgrounded (rare but possible if
-        // the web process fires a late tick) are also blocked.
-        if resigningActive || UIApplication.shared.applicationState == .background {
-            print("BiliWeb: update(state) blocked by resign/background guard")
-            lastState = state
+        // Rules:
+        //   - state.userInitiated == true: always honor. The user tapped
+        //     play/pause/seek; AVPlayer should mirror exactly, even mid-
+        //     resign — this is what fixes Bug 3 (paused → lock shows
+        //     playing) when the user pauses immediately before locking.
+        //   - state.userInitiated == false AND we're trying to pause: this
+        //     is iOS auto-pausing the muted <video> on backgrounding. Drop
+        //     it. AVPlayer keeps playing in the background as designed.
+        //   - state.userInitiated == false AND playing == true: passthrough
+        //     for the periodic 2s tick (currentTime sync, NowPlaying refresh).
+        //
+        // We deliberately do NOT update lastState.playing on a dropped pause —
+        // doing so would corrupt the source of truth and cause Bug 3
+        // (paused-on-lock-shows-playing) by mirroring the bogus pause into
+        // NowPlayingInfo.
+        if !state.userInitiated && !state.playing {
+            print("BiliWeb: update(state) involuntary pause dropped (no user gesture)")
+            // Sync everything EXCEPT playing — preserve last known intent.
+            if let prev = lastState {
+                lastState = State(
+                    src: state.src,
+                    currentTime: state.currentTime,
+                    duration: state.duration,
+                    playing: prev.playing,
+                    userInitiated: prev.userInitiated,
+                    title: state.title,
+                    artist: state.artist,
+                    artworkURL: state.artworkURL
+                )
+            } else {
+                lastState = state
+            }
             refreshNowPlayingInfo()
             return
         }
