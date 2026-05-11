@@ -79,8 +79,21 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /space/{mid}", s.handleSpace)
 	mux.HandleFunc("GET /season/{seasonID}", s.handleSeason)
 	mux.HandleFunc("GET /", s.handleHome)
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.root, "static")))))
+	// Force WKWebView/Safari to revalidate every static asset. Without this
+	// the FileServer only sets Last-Modified, which lets the client cache
+	// heuristically — Attempt 2 of the background-audio fix (a JS-only guard
+	// in native-bridge.js) most likely never reached the iOS device because
+	// of this. no-cache still allows 304s via If-Modified-Since, so unchanged
+	// files cost a HEAD round-trip and nothing more.
+	mux.Handle("GET /static/", http.StripPrefix("/static/", noCacheHandler(http.FileServer(http.Dir(filepath.Join(s.root, "static"))))))
 	return mux
+}
+
+func noCacheHandler(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		h.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

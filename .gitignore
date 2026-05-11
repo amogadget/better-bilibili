@@ -16,6 +16,9 @@ config.local.*
 # Logs.
 *.log
 
+# Handoff / scratchpad notes for the next session — local context only.
+HANDOFF.md
+
 # Editor / OS noise.
 .DS_Store
 Thumbs.db

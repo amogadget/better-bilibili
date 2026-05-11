@@ -27,6 +27,11 @@ import WebKit
 
 final class BiliPlayer: NSObject {
 
+    // Bump this whenever you edit this file. The init() print makes it
+    // appear in Xcode's console on launch so you can confirm a fresh build
+    // is actually running on the device (vs. a stale install).
+    private static let buildTag = "BiliPlayer 2026-05-11/attempt4"
+
     struct State {
         let src: URL
         let currentTime: Double
@@ -43,9 +48,11 @@ final class BiliPlayer: NSObject {
     private var artworkCacheKey: String?
     private var nowPlayingArtwork: MPMediaItemArtwork?
     private var resigningActive = false
+    private var rateObservation: NSKeyValueObservation?
 
     override init() {
         super.init()
+        print("BiliWeb: \(BiliPlayer.buildTag) init")
         registerLifecycleObservers()
         setupRemoteCommands()
     }
@@ -55,6 +62,9 @@ final class BiliPlayer: NSObject {
     }
 
     func update(state: State) {
+        let appState = UIApplication.shared.applicationState.rawValue
+        print("BiliWeb: update(state) playing=\(state.playing) t=\(state.currentTime) resigning=\(resigningActive) appState=\(appState)")
+
         // When the app is heading to the background, iOS auto-pauses the
         // WKWebView <video>. That pause can arrive here before UIKit sets
         // applicationState to .inactive, so a state-based guard misses it.
@@ -67,6 +77,7 @@ final class BiliPlayer: NSObject {
         // arrive after the app is fully backgrounded (rare but possible if
         // the web process fires a late tick) are also blocked.
         if resigningActive || UIApplication.shared.applicationState == .background {
+            print("BiliWeb: update(state) blocked by resign/background guard")
             lastState = state
             refreshNowPlayingInfo()
             return
@@ -103,6 +114,18 @@ final class BiliPlayer: NSObject {
             player.replaceCurrentItem(with: item)
         } else {
             player = AVPlayer(playerItem: item)
+            // Observe rate transitions so the log shows exactly when (and
+            // presumably why) AVPlayer stops. If the rate goes to 0 while
+            // resigningActive=true, the bug is the OS pausing us, not our
+            // update(state) path.
+            rateObservation = player?.observe(\.rate, options: [.old, .new]) { [weak self] _, change in
+                let old = change.oldValue ?? -1
+                let new = change.newValue ?? -1
+                guard old != new else { return }
+                let resigning = self?.resigningActive ?? false
+                let appState = UIApplication.shared.applicationState.rawValue
+                print("BiliWeb: AVPlayer.rate \(old) -> \(new) resigning=\(resigning) appState=\(appState)")
+            }
         }
         player?.automaticallyWaitsToMinimizeStalling = true
         if seconds > 0 {
@@ -122,9 +145,14 @@ final class BiliPlayer: NSObject {
                        name: UIApplication.willResignActiveNotification, object: nil)
         nc.addObserver(self, selector: #selector(didBecomeActive),
                        name: UIApplication.didBecomeActiveNotification, object: nil)
+        nc.addObserver(self, selector: #selector(didEnterBackground),
+                       name: UIApplication.didEnterBackgroundNotification, object: nil)
+        nc.addObserver(self, selector: #selector(handleRouteChange),
+                       name: AVAudioSession.routeChangeNotification, object: nil)
     }
 
     @objc private func willEnterForeground() {
+        print("BiliWeb: willEnterForeground appState=\(UIApplication.shared.applicationState.rawValue) playerRate=\(player?.rate ?? 0)")
         guard let player = player else { return }
         // AVPlayer was the audio source while we were locked. Tell the web
         // <video> to seek to where AVPlayer reached so the visible frame
@@ -143,11 +171,23 @@ final class BiliPlayer: NSObject {
     }
 
     @objc private func willResignActive() {
+        print("BiliWeb: willResignActive playerRate=\(player?.rate ?? 0) lastPlaying=\(lastState?.playing ?? false)")
         resigningActive = true
     }
 
     @objc private func didBecomeActive() {
+        print("BiliWeb: didBecomeActive playerRate=\(player?.rate ?? 0)")
         resigningActive = false
+    }
+
+    @objc private func didEnterBackground() {
+        print("BiliWeb: didEnterBackground playerRate=\(player?.rate ?? 0)")
+    }
+
+    @objc private func handleRouteChange(_ notification: Notification) {
+        let raw = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
+        let reason = AVAudioSession.RouteChangeReason(rawValue: raw)
+        print("BiliWeb: routeChange reason=\(raw) (\(String(describing: reason)))")
     }
 
     @objc private func handleInterruption(_ notification: Notification) {
@@ -156,9 +196,40 @@ final class BiliPlayer: NSObject {
               let type = AVAudioSession.InterruptionType(rawValue: raw)
         else { return }
 
-        if type == .ended,
-           let optsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+        // Log everything in userInfo for diagnosis — iOS sometimes includes
+        // an InterruptionReason key on newer versions that tells us *why*
+        // the interruption happened (built-in mic, app suspended, etc.).
+        print("BiliWeb: interruption type=\(raw) (\(type == .began ? "began" : "ended")) resigning=\(resigningActive) lastPlaying=\(lastState?.playing ?? false) userInfo=\(userInfo)")
+
+        if type == .began {
+            // Attempt 4 theory: when the WKWebView <video> is paused by iOS
+            // during the resign-active transition, the host's audio session
+            // gets an interruption notification, and AVPlayer auto-pauses
+            // on .began regardless of our state-push guards. If the user
+            // was playing and this interruption coincides with the resign
+            // window, force-resume — this is a system reflex, not a real
+            // user-meaningful interruption (which would be a phone call).
+            //
+            // resigningActive scopes the fix narrowly: during a normal
+            // foreground interruption (phone call, Siri, another media app),
+            // we leave AVPlayer paused and let the .ended path handle it.
+            if resigningActive, lastState?.playing == true {
+                print("BiliWeb: interruption.began during resign — re-activating session and resuming")
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    do {
+                        try AVAudioSession.sharedInstance().setActive(true)
+                    } catch {
+                        print("BiliWeb: session re-activate failed: \(error)")
+                    }
+                    self.player?.play()
+                    print("BiliWeb: post-resume playerRate=\(self.player?.rate ?? 0)")
+                }
+            }
+        } else if type == .ended,
+                  let optsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
             let opts = AVAudioSession.InterruptionOptions(rawValue: optsRaw)
+            print("BiliWeb: interruption ended shouldResume=\(opts.contains(.shouldResume))")
             if opts.contains(.shouldResume) {
                 player?.play()
             }

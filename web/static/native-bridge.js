@@ -10,6 +10,13 @@
 // In Safari (no message handler) this file does nothing; audio-mode.js
 // handles the dual-element fallback there.
 (function () {
+    // Visible build marker so you can confirm in the Safari/WKWebView console
+    // that a fresh copy of this file actually reached the device. If you
+    // edit native-bridge.js and don't see the new tag on next page load,
+    // WKWebView is serving a cached copy.
+    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt4';
+    console.log('[BiliWeb] ' + BUILD_TAG);
+
     const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
     if (!native) return;
 
@@ -53,11 +60,18 @@
         return null;
     }
 
-    function pushState() {
+    function pushState(reason) {
+        const playing = !video.paused;
+        const vis = document.visibilityState;
+        console.log('[BiliWeb] pushState reason=' + reason + ' playing=' + playing + ' vis=' + vis + ' t=' + video.currentTime.toFixed(2));
+
         // When the page is hidden (app backgrounded, screen locked), iOS
         // auto-pauses the <video> — that's noise, not a user action. The
         // native AVPlayer keeps running independently.
-        if (document.visibilityState !== 'visible') return;
+        if (vis !== 'visible') {
+            console.log('[BiliWeb] pushState blocked by visibility guard');
+            return;
+        }
 
         const src = audioSourceURL();
         if (!src) return;
@@ -68,7 +82,7 @@
                 src: src,
                 currentTime: video.currentTime,
                 duration: isFinite(video.duration) ? video.duration : 0,
-                playing: !video.paused,
+                playing: playing,
                 title:   meta.title,
                 artist:  meta.artist,
                 artwork: meta.artwork,
@@ -76,15 +90,19 @@
         } catch (e) { /* postMessage can throw on serialization edge cases */ }
     }
 
-    video.addEventListener('play',           pushState);
-    video.addEventListener('pause',          pushState);
-    video.addEventListener('seeked',         pushState);
-    video.addEventListener('loadedmetadata', pushState);
-    video.addEventListener('ratechange',     pushState);
+    video.addEventListener('play',           () => pushState('play'));
+    video.addEventListener('pause',          () => pushState('pause'));
+    video.addEventListener('seeked',         () => pushState('seeked'));
+    video.addEventListener('loadedmetadata', () => pushState('loadedmetadata'));
+    video.addEventListener('ratechange',     () => pushState('ratechange'));
+
+    document.addEventListener('visibilitychange', () => {
+        console.log('[BiliWeb] visibilitychange -> ' + document.visibilityState + ' playing=' + !video.paused);
+    });
 
     // Periodic refresh while playing so currentTime/positions on the lock screen
     // aren't stale by the time the app backgrounds.
-    setInterval(() => { if (!video.paused) pushState(); }, 2000);
+    setInterval(() => { if (!video.paused) pushState('tick'); }, 2000);
 
     // Native pauses its AVPlayer on foreground transition and tells us where
     // it left off so the on-screen <video> can pick up at exactly that frame.
@@ -102,5 +120,5 @@
 
     // Initial sync as soon as metadata is ready (covers the foreground "scan
     // and chill" case before the user actually plays).
-    if (video.readyState >= 1) pushState();
+    if (video.readyState >= 1) pushState('initial');
 })();
