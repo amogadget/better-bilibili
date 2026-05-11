@@ -170,6 +170,36 @@ final class BiliPlayer: NSObject {
                        name: UIApplication.willEnterForegroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(handleInterruption),
                        name: AVAudioSession.interruptionNotification, object: nil)
+        // Natural end-of-stream. AVPlayer doesn't auto-release the session
+        // or update NowPlayingInfo on its own — without this, the lock
+        // screen keeps showing the video as "playing" after it's finished.
+        nc.addObserver(self, selector: #selector(itemDidPlayToEnd),
+                       name: .AVPlayerItemDidPlayToEndTime, object: nil)
+    }
+
+    @objc private func itemDidPlayToEnd(_ notification: Notification) {
+        // Filter to our own item (the notification is global with object:nil).
+        guard let ended = notification.object as? AVPlayerItem,
+              ended === player?.currentItem else { return }
+        player?.pause()
+        releaseAudioSession()
+        refreshNowPlayingInfo()
+    }
+
+    /// Stops playback and releases everything. Called by ContentView's
+    /// navigation delegate when the WKWebView navigates to a new page —
+    /// the user clicked a link away from the watch page, AVPlayer should
+    /// stop following along. Safe to call even when no player exists
+    /// (initial app load, etc.).
+    func stop() {
+        guard player != nil else { return }
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        releaseAudioSession()
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        lastState = nil
+        nowPlayingArtwork = nil
+        artworkCacheKey = nil
     }
 
     @objc private func willEnterForeground() {

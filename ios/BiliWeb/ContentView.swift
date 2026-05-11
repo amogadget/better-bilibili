@@ -51,6 +51,7 @@ struct WebView: UIViewRepresentable {
         webView.scrollView.minimumZoomScale = 1.0
         webView.scrollView.maximumZoomScale = 1.0
         webView.scrollView.bouncesZoom = false
+        webView.navigationDelegate = context.coordinator
         context.coordinator.player.attach(webView: webView)
         webView.load(URLRequest(url: url))
         return webView
@@ -58,8 +59,21 @@ struct WebView: UIViewRepresentable {
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    final class Coordinator: NSObject, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let player = BiliPlayer()
+
+        // Stop AVPlayer whenever the WebView navigates to a new page. The
+        // user clicked a link away from a watch page (e.g., to /home), so
+        // the audio shouldn't keep playing in the background. WKWebView
+        // navigation fires only for real page loads, not for screen lock
+        // or app backgrounding — both of which leave AVPlayer running so
+        // Bug 1's background audio still works.
+        //
+        // BiliPlayer.stop() is a no-op when there's no active player,
+        // so the initial app load does nothing harmful.
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            player.stop()
+        }
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
