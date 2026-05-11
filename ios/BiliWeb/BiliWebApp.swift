@@ -121,7 +121,6 @@ final class SilenceKeeper {
             return
         }
         player.play()
-        print("BiliWeb: silence start")
     }
 
     func stop() {
@@ -129,6 +128,5 @@ final class SilenceKeeper {
         running = false
         player.pause()
         engine.stop()
-        print("BiliWeb: silence stop")
     }
 }

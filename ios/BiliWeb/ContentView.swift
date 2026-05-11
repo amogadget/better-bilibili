@@ -69,12 +69,6 @@ struct WebView: UIViewRepresentable {
             else { return }
 
             switch action {
-            case "log":
-                // JS forwarding console.log into Xcode's console so we can
-                // read the page's diagnostic chatter alongside Swift prints.
-                if let msg = body["msg"] as? String {
-                    print("BiliWeb: " + msg)
-                }
             case "state":
                 guard let srcStr = body["src"] as? String,
                       let src = URL(string: srcStr) else { return }
@@ -91,7 +85,6 @@ struct WebView: UIViewRepresentable {
                 player.update(state: state)
             case "orientation":
                 let to = (body["to"] as? String) ?? "portrait"
-                print("BiliWeb: orientation message received, to=\(to)")
                 forceOrientation(landscape: to == "landscape")
             default:
                 break
@@ -108,34 +101,22 @@ struct WebView: UIViewRepresentable {
             let mask: UIInterfaceOrientationMask = landscape ? [.landscape] : [.portrait]
             DispatchQueue.main.async {
                 AppDelegate.supportedOrientations = mask
-                print("BiliWeb: AppDelegate.supportedOrientations set, raw=\(mask.rawValue)")
 
                 if #available(iOS 16.0, *) {
-                    let allScenes = UIApplication.shared.connectedScenes
-                    print("BiliWeb: connectedScenes count=\(allScenes.count)")
-
-                    var windowSceneCount = 0
-                    for scene in allScenes {
+                    for scene in UIApplication.shared.connectedScenes {
                         guard let windowScene = scene as? UIWindowScene else { continue }
-                        windowSceneCount += 1
-                        print("BiliWeb: scene \(windowSceneCount) state=\(scene.activationState.rawValue)")
-
                         let prefs = UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: mask)
                         windowScene.requestGeometryUpdate(prefs) { error in
-                            print("BiliWeb: requestGeometryUpdate FAILED: \(error)")
+                            print("BiliWeb: requestGeometryUpdate failed: \(error)")
                         }
-
                         for window in windowScene.windows {
                             window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-                            print("BiliWeb: setNeedsUpdate on \(type(of: window.rootViewController as Any))")
                         }
                     }
-                    print("BiliWeb: applied to \(windowSceneCount) window scenes")
                 } else {
                     let orientation: UIInterfaceOrientation = landscape ? .landscapeRight : .portrait
                     UIDevice.current.setValue(orientation.rawValue, forKey: "orientation")
                     UIViewController.attemptRotationToDeviceOrientation()
-                    print("BiliWeb: pre-iOS 16 fallback used")
                 }
             }
         }

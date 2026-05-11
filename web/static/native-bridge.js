@@ -2,138 +2,101 @@
 //
 // When running inside the iOS native shell (BiliWeb.app, which exposes
 // `window.webkit.messageHandlers.player`), keep the host app informed of
-// the current playback state. The host transparently swaps in an AVPlayer
-// when the app backgrounds so audio keeps going while iOS suspends the
-// WebContent process — this script is what lets it know the URL, position,
-// and metadata to take over with.
+// the current playback state. The host runs an AVPlayer in parallel and
+// uses these state pushes to mirror position/play-pause; when the app
+// backgrounds, AVPlayer is the audio source while WKWebView's WebContent
+// process is suspended.
 //
 // In Safari (no message handler) this file does nothing; audio-mode.js
 // handles the dual-element fallback there.
+//
+// ---------------------------------------------------------------------------
+// The tricky part: distinguishing user pauses from iOS system pauses.
+//
+// When iOS backgrounds the app (swipe-up-to-home, lock, app switcher), it
+// auto-pauses the muted <video> element. That fires a normal `pause` event
+// indistinguishable from the user tapping the pause button — and our naive
+// "mirror pause into AVPlayer" handler would then halt the background audio.
+//
+// Every signal we tried to gate on (visibilityState, applicationState,
+// willResignActive) arrives AFTER the pause event has been delivered. The
+// one signal that beats it: the iOS home-indicator swipe is a system gesture
+// — WebKit fires `touchstart` for it but later fires `touchcancel` when iOS
+// claims the gesture as its own. So we tag each state push with
+// `userInitiated`, which is true only if a JS gesture is recent AND wasn't
+// canceled. Swift then drops any pause with `userInitiated=false`.
+//
+// For the swipe-up case, pause arrives *during* the touch (touchcancel
+// hasn't fired yet). So we defer pause pushes by 300ms when a touch is
+// in progress, giving touchcancel time to race ahead and zero out gesture
+// credit. Clean taps (touchend already fired) bypass the defer so user
+// pauses reach AVPlayer immediately — important because the user might
+// lock the screen right after, and the deferred pause would otherwise be
+// swallowed by the visibility guard.
+// ---------------------------------------------------------------------------
 (function () {
-    const BUILD_TAG = 'native-bridge.js 2026-05-11/attempt10';
-
     const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
-    if (!native) { console.log('[BiliWeb] ' + BUILD_TAG + ' (no native bridge)'); return; }
-
-    // Forward JS logs to Swift so they appear in Xcode's console without
-    // needing to attach Safari Web Inspector. Use nlog() instead of
-    // console.log for anything you want to read alongside Swift's prints.
-    function nlog(msg) {
-        const line = '[js] ' + msg;
-        console.log('[BiliWeb] ' + msg);
-        try { native.postMessage({ action: 'log', msg: line }); } catch (e) { /* ignore */ }
-    }
-    nlog(BUILD_TAG);
+    if (!native) return;
 
     const video = document.getElementById('player-video');
     if (!video) return;
 
-    // Attempt 6 gesture tracking.
-    //
-    // Attempt 5 assumed iOS's swipe-up-to-home produces no JS input events.
-    // The 2026-05-11 logs disproved that — the swipe fires touchstart in
-    // the page before iOS claims it as a system gesture, so the subsequent
-    // involuntary pause showed up as userInitiated=true.
-    //
-    // The signal that actually distinguishes "user tapped pause" from
-    // "iOS swiped up to home" is **touchcancel**: WebKit fires it when iOS
-    // takes over an in-progress touch (home indicator, control-center pull,
-    // notification-center pull, etc.). When that fires, retroactively
-    // revoke the gesture credit from this touch.
-    //
-    // Belt-and-suspenders: pagehide and visibilitychange-to-hidden also
-    // invalidate, in case touchcancel doesn't fire on some iOS version.
-    // And pause pushes are deferred 300ms to give the invalidation signals
-    // a chance to race ahead of the pause event.
+    // Gesture credit: `lastUserGesture` is the ms-timestamp of the most
+    // recent JS input event from the user. A push is `userInitiated` only
+    // if a gesture happened within GESTURE_WINDOW_MS. `currentTouchStartedAt`
+    // tracks whether a touch is currently in progress (cleared on touchend
+    // or touchcancel), so we know whether to defer pause pushes.
     let lastUserGesture = 0;
     let currentTouchStartedAt = 0;
-    let touchMoveCount = 0;
-    let strayTouchMoveCount = 0;
     const GESTURE_WINDOW_MS = 500;
     const PAUSE_DEFER_MS = 300;
 
-    function invalidateGestureCredit(reason) {
-        if (lastUserGesture !== 0) {
-            nlog('gesture invalidated by ' + reason + ' (was age=' + (Date.now() - lastUserGesture) + 'ms)');
-        }
+    function invalidateGestureCredit() {
         lastUserGesture = 0;
         currentTouchStartedAt = 0;
     }
 
-    document.addEventListener('touchstart', (e) => {
-        const t = e.touches && e.touches[0];
-        const tgt = (e.target && e.target.tagName) || '?';
+    document.addEventListener('touchstart', () => {
         currentTouchStartedAt = Date.now();
         lastUserGesture = currentTouchStartedAt;
-        touchMoveCount = 0;
-        nlog('touchstart target=' + tgt + ' y=' + (t ? Math.round(t.clientY) : 'n/a') + '/' + window.innerHeight);
     }, true);
-    // Attempt 7: gate touchmove on currentTouchStartedAt > 0. Attempt 6's
-    // unconditional `lastUserGesture = Date.now()` was overwritten by
-    // touchmove events that fired during/after the home-indicator swipe,
-    // defeating the touchcancel rollback. After touchcancel zeroes out
-    // currentTouchStartedAt, no further touchmove credits a gesture.
+    // touchmove is gated on currentTouchStartedAt > 0. Without this gate,
+    // touchmoves that iOS sometimes dispatches after touchcancel would
+    // overwrite the cancel-zeroed lastUserGesture, defeating the whole
+    // point of touchcancel-as-system-gesture-signal.
     document.addEventListener('touchmove', () => {
-        if (currentTouchStartedAt > 0) {
-            touchMoveCount++;
-            lastUserGesture = Date.now();
-        } else {
-            // Diagnostic: if iOS keeps firing touchmove after the touch was
-            // canceled/ended, log a few so we can see it without spamming.
-            strayTouchMoveCount++;
-            if (strayTouchMoveCount <= 3) {
-                nlog('stray touchmove after cancel/end (#' + strayTouchMoveCount + ')');
-            }
-        }
+        if (currentTouchStartedAt > 0) lastUserGesture = Date.now();
     }, true);
-    document.addEventListener('touchend',  () => {
-        if (currentTouchStartedAt > 0) {
-            nlog('touchend after ' + touchMoveCount + ' touchmoves');
-        }
-        currentTouchStartedAt = 0;
-    }, true);
+    document.addEventListener('touchend', () => { currentTouchStartedAt = 0; }, true);
     document.addEventListener('touchcancel', () => {
         // iOS claimed this in-progress touch as a system gesture
-        // (home-indicator swipe, control center, etc.). Zero out
-        // lastUserGesture outright — not just roll back to touchstart_time-1.
-        // Attempt 7 used the rollback approach, but the 2026-05-11 logs
-        // showed deferred-pause fired with gestureAge=400ms (touchstart-time
-        // was only 400ms in the past), still inside the 500ms window.
-        // Setting to 0 makes the gesture flag fail the `lastUserGesture > 0`
-        // short-circuit in pushState — fully revoking credit, not rewinding.
-        if (currentTouchStartedAt > 0) {
-            nlog('touchcancel after ' + touchMoveCount + ' touchmoves — zeroing gesture credit');
-        } else {
-            nlog('touchcancel (no active touch)');
-        }
+        // (home-indicator swipe, control center, etc.). Zero out gesture
+        // credit entirely — the short-circuit `lastUserGesture > 0` in
+        // sendState then forces userInitiated=false on any subsequent
+        // pause push, regardless of how recent the touch was.
         lastUserGesture = 0;
         currentTouchStartedAt = 0;
-        strayTouchMoveCount = 0;
     }, true);
 
-    document.addEventListener('mousedown',    () => { lastUserGesture = Date.now(); }, true);
-    // Note: pointerdown / click / keydown DO NOT fire during the iOS
-    // home-indicator swipe — they only fire from genuine user inputs.
-    document.addEventListener('pointerdown',  () => { lastUserGesture = Date.now(); }, true);
-    document.addEventListener('click',        () => { lastUserGesture = Date.now(); }, true);
-    document.addEventListener('keydown',      () => { lastUserGesture = Date.now(); }, true);
+    // Mouse, pointer, click, and keyboard inputs are always user-initiated
+    // — none of them fire during the home-indicator swipe.
+    document.addEventListener('mousedown',   () => { lastUserGesture = Date.now(); }, true);
+    document.addEventListener('pointerdown', () => { lastUserGesture = Date.now(); }, true);
+    document.addEventListener('click',       () => { lastUserGesture = Date.now(); }, true);
+    document.addEventListener('keydown',     () => { lastUserGesture = Date.now(); }, true);
 
-    window.addEventListener('pagehide', () => invalidateGestureCredit('pagehide'));
+    // Belt-and-suspenders: if touchcancel doesn't fire on some iOS version,
+    // the page going hidden is also a clear "no user gesture is in progress"
+    // signal.
+    window.addEventListener('pagehide', invalidateGestureCredit);
     document.addEventListener('visibilitychange', () => {
-        nlog('visibilitychange -> ' + document.visibilityState + ' playing=' + !video.paused);
-        if (document.visibilityState !== 'visible') {
-            invalidateGestureCredit('visibilitychange');
-        }
+        if (document.visibilityState !== 'visible') invalidateGestureCredit();
     });
 
     // In the iOS shell, native AVPlayer is the audio source. The visible
     // <video> element is for pixels only — mute it so we don't get two
-    // simultaneous audio streams. The native player keeps producing audio
-    // through screen-lock and app-switch transitions; the web video just
-    // shows frames while the app is in foreground.
+    // simultaneous audio streams.
     video.muted = true;
-    // If the user toggles unmute on the native controls, re-mute on the
-    // next event so we never play both at once.
     video.addEventListener('volumechange', () => {
         if (!video.muted) video.muted = true;
     });
@@ -152,31 +115,21 @@
 
     // Use the same combined stream URL the web <video> uses. The audio-only
     // DASH track from bilibili is a bare fragmented mp4 (no manifest) and
-    // AVPlayer doesn't reliably play it as a standalone URL — it expects a
-    // progressive mp4 or HLS playlist. Using the combined stream means the
-    // native player has the same well-formed mp4/HLS to chew on.
-    //
-    // (data-audio-src is left on the element for future use once we have a
-    // server-side HLS audio playlist or progressive-mp4 remux.)
+    // AVPlayer doesn't reliably play it as a standalone URL.
     function audioSourceURL() {
         if (video.src) return new URL(video.src, location.href).href;
         return null;
     }
 
     function sendState(reason) {
-        const playing = !video.paused;
         const vis = document.visibilityState;
-        const gestureAge = Date.now() - lastUserGesture;
-        const userInitiated = lastUserGesture > 0 && gestureAge < GESTURE_WINDOW_MS;
-        nlog('pushState reason=' + reason + ' playing=' + playing + ' vis=' + vis + ' t=' + video.currentTime.toFixed(2) + ' gestureAge=' + gestureAge + ' userInit=' + userInitiated);
-
-        if (vis !== 'visible') {
-            nlog('pushState blocked by visibility guard');
-            return;
-        }
+        if (vis !== 'visible') return;
 
         const src = audioSourceURL();
         if (!src) return;
+
+        const gestureAge = Date.now() - lastUserGesture;
+        const userInitiated = lastUserGesture > 0 && gestureAge < GESTURE_WINDOW_MS;
         const meta = readMeta();
         try {
             native.postMessage({
@@ -184,7 +137,7 @@
                 src: src,
                 currentTime: video.currentTime,
                 duration: isFinite(video.duration) ? video.duration : 0,
-                playing: playing,
+                playing: !video.paused,
                 userInitiated: userInitiated,
                 title:   meta.title,
                 artist:  meta.artist,
@@ -193,31 +146,25 @@
         } catch (e) { /* postMessage can throw on serialization edge cases */ }
     }
 
-    // Pause pushes are deferred only when a touch is still in progress —
-    // that's the swipe-up-mid-gesture case where we need to wait for
-    // touchcancel to race ahead and invalidate gesture credit. A clean
-    // user tap (touchstart→touchend completed) means currentTouchStartedAt
-    // is already 0 when the pause event fires, so we send immediately;
-    // this preserves Bug 3's "pause then lock" case where the visibility
-    // guard would otherwise eat the deferred pause before it reaches
-    // Swift (causing AVPlayer to keep running and the lock screen to
-    // show "playing").
+    // Defer pause pushes only when a touch is still in progress — that's
+    // the swipe-up case where we need to wait for touchcancel. A clean
+    // user tap already cleared currentTouchStartedAt via touchend, so it
+    // sends immediately (important: the user may lock the screen right
+    // after, and a deferred pause would be eaten by the visibility guard
+    // before reaching Swift, leaving AVPlayer running).
     let pendingPauseTimer = null;
     function pushState(reason) {
-        const wouldBePause = video.paused;
-        if (wouldBePause && currentTouchStartedAt > 0) {
+        if (video.paused && currentTouchStartedAt > 0) {
             if (pendingPauseTimer) clearTimeout(pendingPauseTimer);
             pendingPauseTimer = setTimeout(() => {
                 pendingPauseTimer = null;
-                sendState(reason + '*deferred');
+                sendState(reason);
             }, PAUSE_DEFER_MS);
-            nlog('pushState reason=' + reason + ' deferred ' + PAUSE_DEFER_MS + 'ms (touch active)');
             return;
         }
         if (pendingPauseTimer) {
             clearTimeout(pendingPauseTimer);
             pendingPauseTimer = null;
-            nlog('pending deferred pause cancelled by ' + reason);
         }
         sendState(reason);
     }
@@ -228,25 +175,20 @@
     video.addEventListener('loadedmetadata', () => pushState('loadedmetadata'));
     video.addEventListener('ratechange',     () => pushState('ratechange'));
 
-    // Periodic refresh while playing so currentTime/positions on the lock screen
-    // aren't stale by the time the app backgrounds.
+    // Periodic refresh while playing so currentTime stays in sync.
     setInterval(() => { if (!video.paused) sendState('tick'); }, 2000);
 
-    // Native pauses its AVPlayer on foreground transition and tells us where
-    // it left off so the on-screen <video> can pick up at exactly that frame.
+    // Native pauses its AVPlayer on foreground transition and tells us
+    // where it left off so the on-screen <video> can pick up at that frame.
     window.__biliResume = function (t) {
         try { video.currentTime = t; } catch (e) { /* ignore unseekable state */ }
         video.play().catch(() => { /* may need user tap; harmless */ });
     };
 
     // Seek-only variant called when the user had paused before backgrounding.
-    // Syncs the visible frame to where AVPlayer reached, but does not start
-    // playback — the user left it paused and we respect that.
     window.__biliSync = function (t) {
         try { video.currentTime = t; } catch (e) { /* ignore unseekable state */ }
     };
 
-    // Initial sync as soon as metadata is ready (covers the foreground "scan
-    // and chill" case before the user actually plays).
     if (video.readyState >= 1) sendState('initial');
 })();

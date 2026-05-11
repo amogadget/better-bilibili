@@ -1,32 +1,69 @@
 # bili-web
 
-A small, single-user, mobile-first web frontend for bilibili. Designed to be
-self-hosted on a VPS so you can browse and watch from a device where the
-official app is either unavailable, restricted, or simply unpleasant to use
+A small, single-user, mobile-first web frontend for bilibili. Designed to
+be self-hosted on a VPS so you can browse and watch from a device where
+the official app is unavailable, restricted, or simply unpleasant to use
 (iOS being the original target).
 
-The bilibili mobile website is intentionally crippled to push users into the
-app, and the app is increasingly ad-heavy. This project is a thin proxy that
+The bilibili mobile website is intentionally crippled to push users into
+the app, and the app is increasingly ad-heavy. This is a thin proxy that
 talks to bilibili's web APIs on your behalf and serves a clean, ad-free
 interface tailored for a phone screen.
 
-## This is a personal-use project
-
+> [!WARNING]
 > **Read this before you deploy.** This server stores your real bilibili
-> cookies in a config file and uses them on every request. Anyone who can
-> reach the URL gets to act as you on bilibili — read your DMs, post
-> comments under your name, change account settings, and more.
+> cookies in a config file and uses them on every request. **Anyone who
+> can reach the URL gets to act as you on bilibili** — read your DMs,
+> change account settings, etc.
 >
-> **Do not expose this on the public internet without authentication in
-> front of it.** The recommended setup (below) is to run it on a private
-> network with [Tailscale](https://tailscale.com) so only your own devices
-> can reach it. If you must expose it publicly, put HTTP basic auth or a
-> similar gate on the reverse proxy.
+> Do not expose this on the public internet without authentication in
+> front of it. The recommended setup is to run it on a private network
+> with [Tailscale](https://tailscale.com) so only your own devices can
+> reach it. If you must expose it publicly, put HTTP basic auth on the
+> reverse proxy.
 >
-> Also: this client uses bilibili's web APIs without permission from
-> bilibili. They may change endpoints or signing requirements at any time,
-> and aggressive use against the public APIs can get your account
-> rate-limited or banned. Keep traffic personal-scale.
+> This client also uses bilibili's web APIs without permission from
+> bilibili. They may change endpoints at any time, and aggressive use
+> against the public APIs can get your account rate-limited or banned.
+> Keep traffic personal-scale.
+
+## Table of contents
+
+- [What it does](#what-it-does)
+- [Status](#status)
+- [Architecture](#architecture)
+- [Quick start](#quick-start)
+- [Installation](#installation)
+  - [Build and run](#build-and-run)
+  - [Run as a systemd service](#run-as-a-systemd-service)
+- [Deployment: pick one](#deployment-pick-one)
+  - [Option A — Tailscale (recommended)](#option-a--tailscale-recommended-for-personal-use)
+  - [Option B — Public domain with Caddy](#option-b--public-domain-with-caddy)
+- [iOS native app](#ios-native-app)
+- [Configuration](#configuration)
+- [Routes reference](#routes-reference)
+- [Caveats and known limits](#caveats-and-known-limits)
+- [Repo layout](#repo-layout)
+- [Updating](#updating)
+
+## What it does
+
+- Recommended feed (bilibili's algorithmic homepage)
+- Subscriptions feed (videos from creators you follow)
+- Search
+- Favorites (收藏夹) — folder list and contents
+- Watch later (稍后再看)
+- Watch page with native HTML5 `<video>` playback (capped at 720p)
+  - Single-part videos stream as plain mp4 directly from bilibili's CDN
+    (instant start)
+  - Multi-part videos are remuxed on-the-fly to HLS by `ffmpeg` and served
+    seamlessly as one continuous stream
+  - Creator series (合集 / `ugc_season`) sidebar with episode navigation
+  - Top-level comments
+  - Danmaku (弹幕) overlay synced to playback, with a toggle
+- Pagination on every list page
+- QR-code login — scan with the bilibili app on your phone to grant the
+  server access. Cookies persist on disk
 
 ## Status
 
@@ -34,38 +71,19 @@ interface tailored for a phone screen.
 - Read-only: browse, search, watch. No posting, liking, or commenting.
 - Tested on iPhone Safari. Should work on any modern mobile browser.
 
-## What it does
-
-- Recommended feed (bilibili's algorithmic homepage).
-- Subscriptions feed (videos from creators you follow).
-- Search.
-- Favorites (收藏夹) — folder list and folder contents.
-- Watch later (稍后再看).
-- Watch page with native HTML5 `<video>` playback (capped at 720p by default).
-  - Single-part videos stream as plain mp4 directly from bilibili's CDN
-    (instant start).
-  - Multi-part videos are remuxed on-the-fly to HLS by `ffmpeg` and served
-    seamlessly as one continuous stream.
-  - Creator series (合集 / `ugc_season`) sidebar with episode navigation.
-  - Top-level comments.
-  - Danmaku (弹幕) overlay synced to playback time, with a toggle.
-- Pagination on every list page.
-- QR-code login: scan with the bilibili app on your phone to grant the server
-  access to your account. Cookies persist on disk.
-
 ## Architecture
 
 ```
 iPhone Safari
-     |
-     v   HTTPS
+     │
+     ▼   HTTPS
   Caddy   (TLS termination, reverse proxy)
-     |
-     v   HTTP on 127.0.0.1
+     │
+     ▼   HTTP on 127.0.0.1
   bili-web   (Go binary, ~7 MB, single static executable)
-     |          |
-     |          +-- ffmpeg subprocess (only for multi-part videos)
-     v
+     │          │
+     │          └── ffmpeg subprocess (only for multi-part videos)
+     ▼
   api.bilibili.com  (JSON APIs, with session cookies)
   *.bilivideo.com   (CDN — video bytes proxied through us so the right
                      Referer/User-Agent headers are attached)
@@ -82,16 +100,35 @@ The Go server:
   DASH audio + video streams into a fragmented-mp4 HLS playlist that iOS
   Safari can play natively.
 
+## Quick start
+
+If you've done this kind of thing before, the short version:
+
+```bash
+git clone <your-fork-url> /opt/bili-web
+cd /opt/bili-web
+go build -o bili-web ./cmd/bili-web
+cp config.yaml.example config.yaml && chmod 600 config.yaml
+./bili-web -config config.yaml          # listens on 127.0.0.1:8765
+```
+
+Then pick a [deployment option](#deployment-pick-one) (Tailscale or Caddy)
+and visit `/login` once to scan the QR code from the bilibili app.
+
+The rest of this README is the detailed walk-through.
+
 ## Requirements
 
 - Linux server (any distro). Tested on Ubuntu 24.04 / arm64.
-- Go 1.22 or newer for the build.
-- `ffmpeg` for multi-part videos. Skippable if every video you watch is
-  short enough to be served as a single mp4.
-- A way to reach the server from your phone. Two paths covered below:
-  Tailscale (private, recommended), or a public domain + Caddy.
+- **Go 1.22 or newer** for the build.
+- **ffmpeg** for multi-part videos (skippable if every video you watch is
+  short enough to be served as a single mp4).
+- A way to reach the server from your phone — see
+  [Deployment](#deployment-pick-one).
 
 ## Installation
+
+### Build and run
 
 ```bash
 git clone <your-fork-url> /opt/bili-web
@@ -99,21 +136,16 @@ cd /opt/bili-web
 go build -o bili-web ./cmd/bili-web
 cp config.yaml.example config.yaml
 chmod 600 config.yaml
-```
-
-Run it:
-
-```bash
 ./bili-web -config config.yaml
 ```
 
-It will listen on `127.0.0.1:8765` by default and write its working files
-relative to the current directory (`web/` for templates and static assets,
+It listens on `127.0.0.1:8765` by default and reads working files relative
+to the current directory (`web/` for templates and static assets,
 `cache/hls/` for ffmpeg HLS sessions).
 
-### As a systemd service
+### Run as a systemd service
 
-A reference unit file is in `deploy/bili-web.service`. Adjust paths and copy
+A reference unit file is at `deploy/bili-web.service`. Adjust paths, copy
 to `/etc/systemd/system/`:
 
 ```bash
@@ -122,20 +154,25 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now bili-web
 ```
 
-You can confirm it's listening with `curl http://127.0.0.1:8765/healthz`.
-That gets you a working server reachable on `localhost`. The next two
-sections are about how to reach it from your phone.
+Confirm it's listening:
+
+```bash
+curl http://127.0.0.1:8765/healthz
+```
+
+That's a working server reachable on `localhost`. The next section is
+about how to reach it from your phone.
 
 ## Deployment: pick one
 
 ### Option A — Tailscale (recommended for personal use)
 
-This keeps your server invisible to the public internet. Your phone joins
-your private Tailscale network, and the bili-web service is reachable only
+Your server stays invisible to the public internet. Your phone joins your
+private Tailscale network, and the bili-web service is reachable only
 from devices in that network.
 
-1. **Install Tailscale on the VPS** and sign in. Follow the official
-   instructions for your distro — on Ubuntu/Debian it's roughly:
+1. **Install Tailscale on the VPS.** Follow the official instructions for
+   your distro — on Ubuntu/Debian:
 
    ```bash
    curl -fsSL https://tailscale.com/install.sh | sh
@@ -144,64 +181,55 @@ from devices in that network.
 
    Open the URL it prints to authenticate.
 
-2. **Install the Tailscale app on your iPhone** (App Store) and sign in to
-   the same account. Both devices now see each other on a private network.
+2. **Install the Tailscale app on your iPhone** (App Store) and sign in
+   to the same account.
 
-3. **Find your VPS's Tailscale name.** On the VPS:
+3. **Find your VPS's Tailscale name:**
 
    ```bash
    tailscale status
    ```
 
    The first line shows something like `100.x.y.z   my-vps   you@   linux ...`.
-   You can use either the IP (`100.x.y.z`) or the MagicDNS name
-   (`my-vps`) to reach it.
+   You can use either the IP or the MagicDNS name (`my-vps`).
 
-4. **(Optional but nice) Get HTTPS automatically with `tailscale serve`.**
-   This gives you a `https://my-vps.<tailnet>.ts.net` URL with a real TLS
-   certificate, valid only inside your tailnet:
+4. **(Optional but nice) Get HTTPS with `tailscale serve`** — gives you a
+   `https://my-vps.<tailnet>.ts.net` URL with a real TLS certificate,
+   valid only inside your tailnet:
 
    ```bash
    sudo tailscale serve --bg --https=443 / http://127.0.0.1:8765
    ```
 
-   Open that URL in Safari on your phone and you're in. No DNS records,
-   no Caddy, no Cloudflare, nothing public.
-
-   Without `tailscale serve`, you can still hit the service over plain
-   HTTP at `http://my-vps:8765` — fine on a private tailnet, just less
-   pretty.
+Without `tailscale serve`, you can still hit the service over plain HTTP
+at `http://my-vps:8765` — fine on a private tailnet.
 
 That's it. Skip the rest of this section if you're using Tailscale.
 
 ### Option B — Public domain with Caddy
 
 Use this only if you have a reason to expose the service publicly. **You
-need to add an authentication layer in front of it** (basic auth or
-similar) — see the warning at the top of this README.
+need to add an authentication layer in front of it** — see the warning
+at the top.
 
 #### 1. DNS record
 
-Pick a subdomain for the service (e.g. `bili.example.com`). At your DNS
-provider, add an **A record**:
+At your DNS provider, add an **A record** pointing at your VPS's public
+IPv4:
 
 | Field | Value |
 |---|---|
 | Type | A |
-| Name | `bili` (or whatever subdomain you picked) |
-| Value / Target | your VPS's public IPv4 address |
-| TTL | leave default (auto / 1h is fine) |
+| Name | `bili` (or whatever subdomain you pick) |
+| Value | your VPS's public IPv4 |
+| TTL | leave default |
 
-If your DNS provider is **Cloudflare**, set the record to
-**DNS only (gray cloud)**, not proxied (orange cloud). Two reasons:
+If your DNS provider is **Cloudflare**, set the record to **DNS only
+(gray cloud)**, not proxied (orange cloud) — Cloudflare's free plan caps
+long-running requests at 100s (breaks HLS), and proxied mode prevents
+Caddy from completing the HTTP-01 ACME challenge.
 
-- Cloudflare's free plan caps long-running requests at 100 seconds, which
-  can break HLS playback.
-- The proxied mode answers the HTTP-01 ACME challenge itself, so Caddy
-  cannot fetch a Let's Encrypt certificate for your domain. With the gray
-  cloud, the request reaches your server directly and Caddy gets its cert.
-
-Verify the record propagated:
+Verify:
 
 ```bash
 dig +short bili.example.com   # should print your VPS IP
@@ -219,13 +247,9 @@ sudo apt update
 sudo apt install caddy
 ```
 
-This installs Caddy, enables it as a systemd service, and creates
-`/etc/caddy/Caddyfile`.
-
 #### 3. Configure Caddy
 
-Open `/etc/caddy/Caddyfile` and add a block for your subdomain (replace
-`bili.example.com` with yours):
+Open `/etc/caddy/Caddyfile` and add a block (replace `bili.example.com`):
 
 ```caddyfile
 bili.example.com {
@@ -241,8 +265,7 @@ bili.example.com {
 `flush_interval -1` matters: it disables Caddy's response buffering so
 video bytes stream out as soon as they arrive.
 
-There's a copy of this snippet at `deploy/Caddyfile.snippet` you can
-append directly:
+A copy of this snippet is at `deploy/Caddyfile.snippet`:
 
 ```bash
 sudo tee -a /etc/caddy/Caddyfile < deploy/Caddyfile.snippet
@@ -251,24 +274,29 @@ sudo systemctl reload caddy
 ```
 
 Caddy will fetch a Let's Encrypt certificate the first time someone hits
-the URL. You can watch progress with:
-
-```bash
-sudo journalctl -u caddy -f
-```
-
-Once you see `certificate obtained successfully`, open
-`https://bili.example.com` on your phone.
+the URL. Watch progress with `sudo journalctl -u caddy -f`. Once you see
+`certificate obtained successfully`, open `https://bili.example.com` on
+your phone.
 
 #### 4. Firewall
 
-Make sure your VPS firewall (and your cloud provider's firewall, if any —
-e.g. Oracle's VCN security list, AWS security groups) allows inbound TCP
-on ports **80** (for the ACME HTTP-01 challenge) and **443** (for HTTPS).
+Allow inbound TCP on ports **80** (ACME HTTP-01) and **443** (HTTPS).
 You should **not** expose port 8765 publicly; only Caddy on `localhost`
 talks to it.
 
-## Configuration (`config.yaml`)
+## iOS native app
+
+A thin native shell that wraps the web frontend in a `WKWebView` and gives
+it true OS-level background audio (the web alone can't get the
+background-audio entitlement).
+
+See [`ios/README.md`](ios/README.md) for the full Xcode setup walkthrough
+and the architectural deep-dive on how the AVPlayer audio bridge and the
+"is this pause from the user or from iOS?" gesture-tracking logic work.
+
+## Configuration
+
+`config.yaml`:
 
 ```yaml
 listen: "127.0.0.1:8765"
@@ -282,7 +310,9 @@ Leave `cookies` blank — you'll fill them in by visiting `/login` once and
 scanning a QR code with the bilibili app. The values are written back to
 this file (chmod 0600) on a successful login.
 
-## Routes
+## Routes reference
+
+User-facing:
 
 | Path | What |
 |---|---|
@@ -296,7 +326,7 @@ this file (chmod 0600) on a successful login.
 | `/login` | QR login (only when not authenticated) |
 | `/healthz` | Liveness check |
 
-Internal routes (you don't normally hit these directly):
+Internal (you don't normally hit these directly):
 
 - `/stream/{bvid}` — single-mp4 byte proxy with Range support
 - `/hls/{bvid}/{file}` — HLS playlist + fmp4 segments
@@ -306,9 +336,9 @@ Internal routes (you don't normally hit these directly):
 
 ## Caveats and known limits
 
-- **WBI signing is implemented for the recommend feed only.** The other
-  endpoints currently in use don't require it. If bilibili tightens that in
-  the future, expect to extend `internal/bili/wbi.go` to cover more callers.
+- **WBI signing is implemented for the recommend feed only.** Other
+  endpoints in use don't currently require it. If bilibili tightens that,
+  extend `internal/bili/wbi.go` to cover more callers.
 - **No `buvid3` cookie is set.** A few endpoints want one; if any feed
   starts coming back empty, harvesting `buvid3` from a single GET to
   `bilibili.com` is the fix.
@@ -322,13 +352,13 @@ Internal routes (you don't normally hit these directly):
 - **Danmaku in iOS native fullscreen will not appear.** The overlay is a
   sibling DOM node, not part of the `<video>` element. Tap to exit
   fullscreen if you want danmaku.
-- **The server is intentionally not multi-tenant.** See the warning at the
-  top of this README — anyone who reaches the URL acts as you on bilibili.
+- **The server is intentionally not multi-tenant.** See the warning at
+  the top — anyone who reaches the URL acts as you on bilibili.
 
-## Layout
+## Repo layout
 
 ```
-cmd/bili-web/         entrypoint
+cmd/bili-web/         entry point
 internal/
   bili/               bilibili API client (search, video info, playurl,
                       DASH, comments, danmaku, favorites, watch-later,
@@ -338,7 +368,9 @@ internal/
   server/             HTTP handlers and view types
 web/
   templates/          server-rendered HTML (Go html/template)
-  static/             style.css, login.js, danmaku.js
+  static/             CSS, JS (login, danmaku, audio fallback, native
+                      bridge for iOS shell, fullscreen gesture, etc.)
+ios/                  native iOS shell sources + setup README
 deploy/               systemd unit, Caddy snippet
 ```
 
@@ -350,5 +382,8 @@ go build -o bili-web ./cmd/bili-web
 sudo systemctl restart bili-web
 ```
 
-Templates and static assets are read from disk on each request, so you can
-edit `web/` and refresh without a rebuild.
+Templates and static assets are read from disk on each request, so you
+can edit `web/` and refresh without a rebuild. The `/static/` route
+serves `Cache-Control: no-cache, must-revalidate` so WKWebView / Safari
+always revalidate freshness — important when iterating on JS that the
+iOS shell loads.
