@@ -65,7 +65,11 @@ struct BiliWebApp: App {
             // produce OSStatus -50 with .playback. AirPlay works with
             // .playback by default — no option flag needed.
             try session.setCategory(.playback, mode: .moviePlayback)
-            try session.setActive(true)
+            // Don't activate here. Activating a .playback session
+            // interrupts other audio apps, and we haven't decided to make
+            // any sound yet — the user just opened the app. Activation is
+            // deferred to BiliPlayer.claimAudioSession() which runs when
+            // AVPlayer actually starts playing.
         } catch {
             print("BiliWeb: audio session setup failed: \(error)")
         }
