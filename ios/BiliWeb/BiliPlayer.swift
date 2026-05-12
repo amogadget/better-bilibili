@@ -124,10 +124,12 @@ final class BiliPlayer: NSObject {
         refreshNowPlayingInfo()
     }
 
-    /// Activate the audio session and start the silence keeper. Called
-    /// when AVPlayer is about to play. Holds iOS's media-app status only
-    /// for the duration of actual playback so we don't permanently bind
-    /// the Bluetooth route.
+    /// Activate the audio session, start the silence keeper, and disable
+    /// the idle timer. Called when AVPlayer is about to play. Holds iOS's
+    /// media-app status only for the duration of actual playback so we
+    /// don't permanently bind the Bluetooth route. Disabling the idle
+    /// timer keeps the screen from auto-dimming during video playback —
+    /// iOS doesn't count AVPlayer activity as "user activity" on its own.
     private func claimAudioSession() {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
@@ -135,9 +137,13 @@ final class BiliPlayer: NSObject {
             print("BiliWeb: claimAudioSession setActive failed: \(error)")
         }
         BiliWebApp.silence.start()
+        DispatchQueue.main.async {
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
     }
 
-    /// Stop the silence keeper and deactivate the audio session.
+    /// Stop the silence keeper, deactivate the audio session, and re-enable
+    /// the idle timer so the screen can dim again.
     /// `.notifyOthersOnDeactivation` wakes other audio apps so they can
     /// take the route immediately.
     private func releaseAudioSession() {
@@ -146,6 +152,9 @@ final class BiliPlayer: NSObject {
             try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
             print("BiliWeb: releaseAudioSession setActive(false) failed: \(error)")
+        }
+        DispatchQueue.main.async {
+            UIApplication.shared.isIdleTimerDisabled = false
         }
     }
 
